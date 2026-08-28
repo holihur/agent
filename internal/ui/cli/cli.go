@@ -29,10 +29,11 @@ import (
 type UI struct {
 	Agent *agent.Agent
 
-	in      io.Reader
-	out     io.Writer
-	rl      *readline.Instance // TTY 会话;nil = 逐行兜底
-	scanner *bufio.Scanner
+	in       io.Reader
+	out      io.Writer
+	rl       *readline.Instance // TTY 会话;nil = 逐行兜底
+	scanner  *bufio.Scanner
+	streamed bool // 本轮已流式输出(收尾不重复打印答案)
 }
 
 func New(in io.Reader, out io.Writer) *UI {
@@ -86,6 +87,14 @@ func (u *UI) readLine(prompt string) (string, error) {
 	return u.scanner.Text(), nil
 }
 
+// TextDeltaSink 返回接给 Agent.OnTextDelta 的增量渲染函数。
+func (u *UI) TextDeltaSink() func(agent.TextDelta) {
+	return func(d agent.TextDelta) {
+		u.streamed = true
+		u.write(d.Text)
+	}
+}
+
 // Run 启动 REPL:"> " 提示 → 读行 → agent.Run → 打印。
 // exit/quit/Ctrl-D 退出;Ctrl-C 清空当前行;单轮致命错误只打印不退出。
 func (u *UI) Run(ctx context.Context) error {
@@ -114,7 +123,8 @@ func (u *UI) Run(ctx context.Context) error {
 			u.write("error: agent not wired\n")
 			continue
 		}
-		answer, err := u.Agent.Run(ctx, line)
+		u.streamed = false
+		_, err = u.runOnce(ctx, line)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return nil
@@ -122,8 +132,38 @@ func (u *UI) Run(ctx context.Context) error {
 			u.write(fmt.Sprintf("error: %v\n", err))
 			continue
 		}
+	}
+}
+
+// runOnce 完成一次问答的渲染收尾:流式期间已输出的文本不再重复打印;
+// 错误时先补换行保持终端整洁。
+func (u *UI) runOnce(ctx context.Context, line string) (string, error) {
+	if u.Agent == nil {
+		return "", errors.New("agent not wired")
+	}
+	u.streamed = false
+	answer, err := u.Agent.Run(ctx, line)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return "", err
+		}
+		if u.streamed {
+			u.write("\n")
+		}
+		return "", err
+	}
+	if u.streamed {
+		u.write("\n")
+	} else {
 		u.write(answer + "\n")
 	}
+	return answer, nil
+}
+
+// RunOnce 一次性问答(-q 模式):不启动 readline,直接渲染。
+func (u *UI) RunOnce(ctx context.Context, question string) error {
+	_, err := u.runOnce(ctx, question)
+	return err
 }
 
 // ConfirmHook 返回工具确认钩子:每次工具调用前向用户请求放行。

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"agent/internal/tools"
@@ -385,5 +386,68 @@ func TestMutateAssistantBeforeHistory(t *testing.T) {
 	}
 	if last := ag.Messages[1]; last.Blocks[0].Text != "clean" {
 		t.Fatalf("history = %+v", last)
+	}
+}
+
+// ---- 流式 ----
+
+type fakeStreamingLLM struct {
+	res        TurnResult
+	deltas     []TextDelta
+	usedStream bool
+	usedTurn   bool
+}
+
+func (f *fakeStreamingLLM) Turn(context.Context, TurnRequest) (TurnResult, error) {
+	f.usedTurn = true
+	return f.res, nil
+}
+
+func (f *fakeStreamingLLM) TurnStream(_ context.Context, _ TurnRequest, emit func(TextDelta)) (TurnResult, error) {
+	f.usedStream = true
+	for _, d := range f.deltas {
+		emit(d)
+	}
+	return f.res, nil
+}
+
+func TestRunUsesStreamingWhenConsumerPresent(t *testing.T) {
+	p := &fakeProvider{tools: []tools.ToolDef{{Name: "x", Description: "d", InputSchema: map[string]any{"type": "object"}}}}
+	fl := &fakeStreamingLLM{
+		res:    TurnResult{Assistant: Message{Role: RoleAssistant, Blocks: []Block{NewText("hello world")}}, StopReason: "end_turn"},
+		deltas: []TextDelta{{Text: "hello"}, {Text: " world"}},
+	}
+	ag := newTestAgent(t, fl, p)
+	var got []string
+	ag.OnTextDelta = func(d TextDelta) { got = append(got, d.Text) }
+
+	answer, err := ag.Run(context.Background(), "hi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if answer != "hello world" {
+		t.Fatalf("answer = %q", answer)
+	}
+	if !fl.usedStream || fl.usedTurn {
+		t.Fatalf("stream=%v turn=%v", fl.usedStream, fl.usedTurn)
+	}
+	if strings.Join(got, "|") != "hello| world" {
+		t.Fatalf("deltas = %v", got)
+	}
+}
+
+func TestRunFallsBackToTurnWithoutConsumer(t *testing.T) {
+	p := &fakeProvider{tools: []tools.ToolDef{{Name: "x", Description: "d", InputSchema: map[string]any{"type": "object"}}}}
+	fl := &fakeStreamingLLM{
+		res:    TurnResult{Assistant: Message{Role: RoleAssistant, Blocks: []Block{NewText("ok")}}, StopReason: "end_turn"},
+		deltas: []TextDelta{{Text: "ok"}},
+	}
+	ag := newTestAgent(t, fl, p)
+
+	if _, err := ag.Run(context.Background(), "hi"); err != nil {
+		t.Fatal(err)
+	}
+	if fl.usedStream || !fl.usedTurn {
+		t.Fatalf("stream=%v turn=%v, want Turn fallback", fl.usedStream, fl.usedTurn)
 	}
 }

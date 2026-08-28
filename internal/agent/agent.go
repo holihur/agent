@@ -25,6 +25,9 @@ type Agent struct {
 	Registry *tools.Registry // 工具来源(编排层依赖 tools 层)
 	System   string          // system prompt(协议要点 #1:顶层字段,不进 messages)
 	Hooks    *Hooks          // 生命周期钩子;nil = 无钩子(全部分发方法 nil 安全)
+	// OnTextDelta 非 nil 且 LLM 支持 StreamingLLM 时,文本增量经此发出;
+	// 最终结果不受影响(流式只是传输形态)。
+	OnTextDelta func(TextDelta)
 
 	Messages []Message // 全部领域状态,单调追加,永不改写历史
 }
@@ -49,7 +52,7 @@ func (a *Agent) Run(ctx context.Context, user string) (string, error) {
 		}
 		req = a.Hooks.chainTurnRequest(req)
 		a.Hooks.emitBeforeLLM(TurnStat{Turn: turn, Messages: len(req.Messages), Tools: len(req.Tools)})
-		res, err := a.LLM.Turn(ctx, req)
+		res, err := a.turn(ctx, req)
 		if err != nil {
 			err = fmt.Errorf("agent: llm turn: %w", err)
 			a.Hooks.emitRunEnd(RunOutcome{Err: err, Turns: turns})
@@ -75,6 +78,16 @@ func (a *Agent) Run(ctx context.Context, user string) (string, error) {
 	}
 	a.Hooks.emitRunEnd(RunOutcome{Err: ErrTooManyTurns, Turns: maxTurns})
 	return "", ErrTooManyTurns
+}
+
+// turn 按能力选择调用形态:有增量消费者且适配器支持流式时走 TurnStream,否则 Turn。
+func (a *Agent) turn(ctx context.Context, req TurnRequest) (TurnResult, error) {
+	if a.OnTextDelta != nil {
+		if s, ok := a.LLM.(StreamingLLM); ok {
+			return s.TurnStream(ctx, req, a.OnTextDelta)
+		}
+	}
+	return a.LLM.Turn(ctx, req)
 }
 
 // turnRequest 把当前状态投影为一次 Turn 的输入。

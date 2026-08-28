@@ -176,15 +176,11 @@ func run() error {
 	llmClient.AuthStyle = authStyle
 	ag := &agent.Agent{LLM: llmClient, Registry: registry, System: *system, Hooks: hooks}
 
-	ui.Agent = ag // 两阶段装配:Responder(即 UI)先于 Agent 可用
+	ui.Agent = ag                       // 两阶段装配:Responder(即 UI)先于 Agent 可用
+	ag.OnTextDelta = ui.TextDeltaSink() // 流式增量 → 终端
 
 	if *quick != "" {
-		answer, err := ag.Run(ctx, *quick)
-		if err != nil {
-			return err
-		}
-		fmt.Println(answer)
-		return nil
+		return ui.RunOnce(ctx, *quick)
 	}
 	return ui.Run(ctx)
 }

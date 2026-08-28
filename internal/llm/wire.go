@@ -24,6 +24,7 @@ type wireRequest struct {
 	System    string        `json:"system,omitempty"`
 	Messages  []wireMessage `json:"messages"`
 	Tools     []wireTool    `json:"tools,omitempty"`
+	Stream    bool          `json:"stream,omitempty"` // true = SSE 流式响应
 }
 
 type wireMessage struct {

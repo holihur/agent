@@ -29,3 +29,15 @@ type TurnResult struct {
 type LLM interface {
 	Turn(ctx context.Context, r TurnRequest) (TurnResult, error)
 }
+
+// TextDelta 是流式输出的文本增量。
+type TextDelta struct {
+	Text string
+}
+
+// StreamingLLM 是支持流式增量的 LLM 适配器的可选扩展接口:
+// delta 只承载 text 增量(thinking/tool_use 静默组装),最终 TurnResult 与
+// 非流式完全一致。Agent 在存在增量消费者且适配器支持时优先走流式。
+type StreamingLLM interface {
+	TurnStream(ctx context.Context, r TurnRequest, emit func(TextDelta)) (TurnResult, error)
+}

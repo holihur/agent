@@ -53,25 +53,9 @@ func (c *Client) Turn(ctx context.Context, r agent.TurnRequest) (agent.TurnResul
 		return agent.TurnResult{}, fmt.Errorf("llm: encode request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/v1/messages", bytes.NewReader(body))
+	resp, err := c.post(ctx, body)
 	if err != nil {
-		return agent.TurnResult{}, fmt.Errorf("llm: build request: %w", err)
-	}
-	req.Header.Set("content-type", "application/json")
-	switch c.AuthStyle {
-	case "x-api-key":
-		req.Header.Set("x-api-key", c.APIKey)
-	case "both":
-		req.Header.Set("x-api-key", c.APIKey)
-		req.Header.Set("authorization", "Bearer "+c.APIKey)
-	default:
-		req.Header.Set("authorization", "Bearer "+c.APIKey)
-	}
-	req.Header.Set("anthropic-version", anthropicVersion)
-
-	resp, err := c.http().Do(req)
-	if err != nil {
-		return agent.TurnResult{}, fmt.Errorf("llm: http: %w", err)
+		return agent.TurnResult{}, err
 	}
 	defer resp.Body.Close()
 
@@ -110,6 +94,30 @@ func (c *Client) Turn(ctx context.Context, r agent.TurnRequest) (agent.TurnResul
 		Assistant:  agent.Message{Role: agent.RoleAssistant, Blocks: blocks},
 		StopReason: probe.StopReason,
 	}, nil
+}
+
+func (c *Client) post(ctx context.Context, body []byte) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/v1/messages", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("llm: build request: %w", err)
+	}
+	req.Header.Set("content-type", "application/json")
+	switch c.AuthStyle {
+	case "x-api-key":
+		req.Header.Set("x-api-key", c.APIKey)
+	case "both":
+		req.Header.Set("x-api-key", c.APIKey)
+		req.Header.Set("authorization", "Bearer "+c.APIKey)
+	default:
+		req.Header.Set("authorization", "Bearer "+c.APIKey)
+	}
+	req.Header.Set("anthropic-version", anthropicVersion)
+
+	resp, err := c.http().Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("llm: http: %w", err)
+	}
+	return resp, nil
 }
 
 func (c *Client) http() *http.Client {
