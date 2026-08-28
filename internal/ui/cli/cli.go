@@ -1,10 +1,13 @@
 // Package cli 实现 CLI REPL 交互层:
 //
-//   - 会话循环:读问题 → Agent.Run → 打印回答
+//   - 会话循环:readline 行编辑(方向键/历史/Ctrl-C) → Agent.Run → 打印回答
 //   - tools.Responder:MRTR 追问时在终端逐字段收集用户作答
 //
 // 隔离目标(设计 v4):将来加 TUI/API = 新增 internal/ui/<mode> 包
 // + cmd 里一个 case,agent/tools/llm/mcp 四包零改动。
+//
+// 终端形态自动降级:stdin 为 TTY 时启用 readline(raw mode);
+// 管道/一次性(-q)/测试环境退回逐行扫描,不触碰终端状态。
 package cli
 
 import (
@@ -15,33 +18,92 @@ import (
 	"io"
 	"strings"
 
+	"github.com/chzyer/readline"
+
 	"agent/internal/agent"
 	"agent/internal/tools"
 )
 
 // UI 是 CLI 交互实现:既是会话循环,也是 tools.Responder。
+// Agent 由 cmd 在装配完成后注入(两阶段装配)。
 type UI struct {
-	// Agent 由 cmd 在装配完成后注入(Responder 先于 Agent 可用的两阶段装配)。
 	Agent *agent.Agent
 
-	in  *bufio.Scanner
-	out io.Writer
+	in      io.Reader
+	out     io.Writer
+	rl      *readline.Instance // TTY 会话;nil = 逐行兜底
+	scanner *bufio.Scanner
 }
 
 func New(in io.Reader, out io.Writer) *UI {
-	return &UI{in: bufio.NewScanner(in), out: out}
+	return &UI{in: in, out: out, scanner: bufio.NewScanner(in)}
 }
 
-// Run 启动 REPL:"> " 提示 → 读行 → agent.Run → 打印。exit/quit/EOF 退出。
-// 单轮致命错误只打印不退出(会话继续);用户中断(ctx 取消)则退出。
+// startRL 在 TTY 上启动 readline。延迟到 Run 才启动:
+// 一次性(-q)模式不碰终端状态,避免进程退出后终端残留 raw mode。
+func (u *UI) startRL() {
+	rc, ok := u.in.(io.ReadCloser)
+	if !ok || !readline.DefaultIsTerminal() {
+		return
+	}
+	rl, err := readline.NewEx(&readline.Config{
+		Prompt:       "> ",
+		Stdin:        rc,
+		Stdout:       u.out,
+		HistoryLimit: 500,
+	})
+	if err != nil {
+		return // 启动失败保持兜底路径
+	}
+	u.rl = rl
+}
+
+func (u *UI) stopRL() {
+	if u.rl != nil {
+		_ = u.rl.Close()
+		u.rl = nil
+	}
+}
+
+// write 经 readline 输出(屏幕感知,避免行编辑重绘错位)。
+func (u *UI) write(s string) {
+	if u.rl != nil {
+		_, _ = u.rl.Write([]byte(s))
+		return
+	}
+	_, _ = fmt.Fprint(u.out, s)
+}
+
+func (u *UI) readLine(prompt string) (string, error) {
+	if u.rl != nil {
+		u.rl.SetPrompt(prompt)
+		return u.rl.Readline()
+	}
+	fmt.Fprint(u.out, prompt)
+	if !u.scanner.Scan() {
+		return "", io.EOF
+	}
+	return u.scanner.Text(), nil
+}
+
+// Run 启动 REPL:"> " 提示 → 读行 → agent.Run → 打印。
+// exit/quit/Ctrl-D 退出;Ctrl-C 清空当前行;单轮致命错误只打印不退出。
 func (u *UI) Run(ctx context.Context) error {
+	u.startRL()
+	defer u.stopRL()
 	for {
-		fmt.Fprint(u.out, "> ")
-		if !u.in.Scan() {
-			fmt.Fprintln(u.out)
-			return nil // EOF
+		line, err := u.readLine("> ")
+		switch {
+		case errors.Is(err, readline.ErrInterrupt):
+			u.write("^C\n")
+			continue
+		case errors.Is(err, io.EOF):
+			u.write("\n")
+			return nil
+		case err != nil:
+			return err
 		}
-		line := strings.TrimSpace(u.in.Text())
+		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
@@ -49,7 +111,7 @@ func (u *UI) Run(ctx context.Context) error {
 			return nil
 		}
 		if u.Agent == nil {
-			fmt.Fprintln(u.out, "error: agent not wired")
+			u.write("error: agent not wired\n")
 			continue
 		}
 		answer, err := u.Agent.Run(ctx, line)
@@ -57,11 +119,37 @@ func (u *UI) Run(ctx context.Context) error {
 			if errors.Is(err, context.Canceled) {
 				return nil
 			}
-			fmt.Fprintf(u.out, "error: %v\n", err)
+			u.write(fmt.Sprintf("error: %v\n", err))
 			continue
 		}
-		fmt.Fprintln(u.out, answer)
+		u.write(answer + "\n")
 	}
+}
+
+// ConfirmHook 返回工具确认钩子:每次工具调用前向用户请求放行。
+// 默认拒绝 —— 直接回车或任何非 y 答复都会拒绝执行。
+func (u *UI) ConfirmHook() func(agent.ToolCall) agent.Decision {
+	return func(c agent.ToolCall) agent.Decision {
+		v, err := u.readLine(fmt.Sprintf("allow %s(%s)? [y/N] ", c.Name, preview(string(c.Input))))
+		if err != nil {
+			return agent.Decision{Deny: true, Reason: "input closed"}
+		}
+		switch strings.TrimSpace(strings.ToLower(v)) {
+		case "y", "yes":
+			return agent.Decision{}
+		default:
+			return agent.Decision{Deny: true, Reason: "user denied"}
+		}
+	}
+}
+
+func preview(s string) string {
+	s = strings.TrimSpace(s)
+	r := []rune(s)
+	if len(r) > 80 {
+		return string(r[:80]) + "…"
+	}
+	return s
 }
 
 // Respond 实现 tools.Responder:终端逐 Prompt、逐字段收集作答。
@@ -69,18 +157,18 @@ func (u *UI) Run(ctx context.Context) error {
 func (u *UI) Respond(_ context.Context, req tools.InputRequest) ([]tools.InputResponse, error) {
 	var resps []tools.InputResponse
 	for _, prompt := range req.Prompts {
-		fmt.Fprintf(u.out, "\n[%s needs input] %s\n", req.Tool, prompt.Message)
+		u.write(fmt.Sprintf("\n[%s needs input] %s\n", req.Tool, prompt.Message))
 		content := map[string]any{}
 		for _, f := range prompt.Fields {
 			mark := ""
 			if f.Required {
 				mark = " (required)"
 			}
-			fmt.Fprintf(u.out, "  %s%s: ", f.Name, mark)
-			if !u.in.Scan() {
-				return nil, fmt.Errorf("input stream closed")
+			v, err := u.readLine(fmt.Sprintf("  %s%s: ", f.Name, mark))
+			if err != nil {
+				return nil, fmt.Errorf("input closed: %w", err)
 			}
-			v := strings.TrimSpace(u.in.Text())
+			v = strings.TrimSpace(v)
 			if v == "" && !f.Required {
 				continue
 			}

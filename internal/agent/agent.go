@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"agent/internal/tools"
 )
@@ -18,10 +19,12 @@ var ErrTooManyTurns = errors.New("agent: exceeded max turns without final answer
 const stopToolUse = "tool_use"
 
 // Agent 是核心循环:调模型 → 判 tool_use → 执行 → 回填 → 再调。
+// 功能扩展一律走 Hooks(见 hooks.go 的包契约),核心循环不再改动。
 type Agent struct {
 	LLM      LLM             // 基础设施 port(由 cmd 注入适配器)
 	Registry *tools.Registry // 工具来源(编排层依赖 tools 层)
 	System   string          // system prompt(协议要点 #1:顶层字段,不进 messages)
+	Hooks    *Hooks          // 生命周期钩子;nil = 无钩子(全部分发方法 nil 安全)
 
 	Messages []Message // 全部领域状态,单调追加,永不改写历史
 }
@@ -29,33 +32,53 @@ type Agent struct {
 // Run 执行一轮完整"思考-行动-观察"循环,返回最终文本回答。
 //
 // 错误分诊(设计 v2 第五节):
-//   - 工具执行失败 → 不是 error,转为 is_error 的 tool_result 回填(模型消化);
+//   - 工具执行失败/被钩子拒绝 → 不是 error,转为 is_error 的 tool_result 回填(模型消化);
 //   - LLM 调用失败 / 列工具失败 / 超循环上限 → 致命 error 冒泡。
 func (a *Agent) Run(ctx context.Context, user string) (string, error) {
+	a.Hooks.emitRunStart(UserInput{Text: user})
+	user = a.Hooks.chainUserInput(user)
 	a.Messages = append(a.Messages, Message{Role: RoleUser, Blocks: []Block{NewText(user)}})
+	turns := 0
 	for turn := 0; turn < maxTurns; turn++ {
+		turns = turn + 1
 		req, err := a.turnRequest(ctx)
 		if err != nil {
-			return "", fmt.Errorf("agent: list tools: %w", err)
+			err = fmt.Errorf("agent: list tools: %w", err)
+			a.Hooks.emitRunEnd(RunOutcome{Err: err, Turns: turns})
+			return "", err
 		}
+		req = a.Hooks.chainTurnRequest(req)
+		a.Hooks.emitBeforeLLM(TurnStat{Turn: turn, Messages: len(req.Messages), Tools: len(req.Tools)})
 		res, err := a.LLM.Turn(ctx, req)
 		if err != nil {
-			return "", fmt.Errorf("agent: llm turn: %w", err)
+			err = fmt.Errorf("agent: llm turn: %w", err)
+			a.Hooks.emitRunEnd(RunOutcome{Err: err, Turns: turns})
+			return "", err
 		}
+		a.Hooks.emitAfterLLM(TurnStat{
+			Turn: turn, Messages: len(req.Messages), Tools: len(req.Tools),
+			StopReason: res.StopReason, Blocks: len(res.Assistant.Blocks),
+		})
+		res.Assistant = a.Hooks.chainAssistant(res.Assistant)
 		a.Messages = append(a.Messages, res.Assistant)
 		if res.StopReason != stopToolUse {
-			return res.Assistant.TextContent(), nil
+			answer := a.Hooks.chainAnswer(res.Assistant.TextContent())
+			a.Hooks.emitRunEnd(RunOutcome{Answer: answer, Turns: turns})
+			return answer, nil
 		}
-		toolMsg, err := a.execTools(ctx, res.Assistant)
+		toolMsg, err := a.execTools(ctx, res.Assistant, turn)
 		if err != nil {
+			a.Hooks.emitRunEnd(RunOutcome{Err: err, Turns: turns})
 			return "", err
 		}
 		a.Messages = append(a.Messages, toolMsg)
 	}
+	a.Hooks.emitRunEnd(RunOutcome{Err: ErrTooManyTurns, Turns: maxTurns})
 	return "", ErrTooManyTurns
 }
 
 // turnRequest 把当前状态投影为一次 Turn 的输入。
+// Messages 做浅拷贝,防止钩子对请求的 reslice 波及持久状态。
 // 工具列表每次投影时聚合;MCP 源的缓存/分页由各自 Provider 自理。
 func (a *Agent) turnRequest(ctx context.Context) (TurnRequest, error) {
 	defs, err := a.Registry.Tools(ctx)
@@ -66,22 +89,35 @@ func (a *Agent) turnRequest(ctx context.Context) (TurnRequest, error) {
 	for _, d := range defs {
 		specs = append(specs, ToolSpec{Name: d.Name, Description: d.Description, InputSchema: d.InputSchema})
 	}
-	return TurnRequest{System: a.System, Tools: specs, Messages: a.Messages}, nil
+	return TurnRequest{System: a.System, Tools: specs, Messages: cloneMessages(a.Messages)}, nil
 }
 
 // execTools 顺序执行 assistant 消息里的全部 tool_use 块。
 // 协议要点 #3:一轮的多个 tool_use → 合并为一条 user 消息里的多个 tool_result 块。
-func (a *Agent) execTools(ctx context.Context, assistant Message) (Message, error) {
+// 执行链:MutateToolInput → BeforeTool 裁决(可拒绝) → 执行 → MutateToolResult → 回填。
+func (a *Agent) execTools(ctx context.Context, assistant Message, turn int) (Message, error) {
 	var results []Block
 	for _, b := range assistant.Blocks {
 		if b.Type != BlockToolUse {
 			continue
 		}
-		res, err := a.Registry.Call(ctx, b.Name, b.Input)
+		call := a.Hooks.chainToolInput(ToolCall{Turn: turn, Name: b.Name, Input: b.Input})
+		start := time.Now()
+		if dec := a.Hooks.gateTool(call); dec.Deny {
+			results = append(results, NewToolResult(b.ID, "denied: "+dec.Reason, true))
+			a.Hooks.emitAfterTool(ToolOutcome{Turn: turn, Name: b.Name, Text: dec.Reason, Denied: true})
+			continue
+		}
+		res, err := a.Registry.Call(ctx, call.Name, call.Input)
 		if err != nil {
 			// 工具失败不打断循环:错误文本回填给模型,让它自行决策。
 			res = tools.ToolResult{Text: "error: " + err.Error(), IsError: true}
 		}
+		res = a.Hooks.chainToolResult(res)
+		a.Hooks.emitAfterTool(ToolOutcome{
+			Turn: turn, Name: b.Name, Text: res.Text, IsError: res.IsError,
+			Err: err, Duration: time.Since(start),
+		})
 		results = append(results, NewToolResult(b.ID, res.Text, res.IsError))
 	}
 	if len(results) == 0 {

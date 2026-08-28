@@ -21,6 +21,7 @@ import (
 	"os/signal"
 	"regexp"
 	"strings"
+	"time"
 
 	"agent/internal/agent"
 	"agent/internal/llm"
@@ -76,12 +77,14 @@ func main() {
 
 func run() error {
 	var (
-		servers  mcpFlags
-		quick    = flag.String("q", "", "one-shot question (default: interactive REPL)")
-		system   = flag.String("system", defaultSystem, "system prompt")
-		provider = flag.String("provider", "", "env prefix: NAME reads NAME_API_KEY/NAME_APIKEY, NAME_BASE_URL, NAME_MODEL")
-		model    = flag.String("model", "", "model override (default: LLM_MODEL or NAME_MODEL)")
-		maxToks  = flag.Int("max-tokens", 1024, "max_tokens per LLM turn")
+		servers     mcpFlags
+		quick       = flag.String("q", "", "one-shot question (default: interactive REPL)")
+		system      = flag.String("system", defaultSystem, "system prompt")
+		provider    = flag.String("provider", "", "env prefix: NAME reads NAME_API_KEY/NAME_APIKEY, NAME_BASE_URL, NAME_MODEL")
+		model       = flag.String("model", "", "model override (default: LLM_MODEL or NAME_MODEL)")
+		maxToks     = flag.Int("max-tokens", 1024, "max_tokens per LLM turn")
+		confirmTool = flag.Bool("confirm-tool", false, "ask before every tool call (hook)")
+		verbose     = flag.Bool("verbose", false, "print LLM turns and tool outcomes to stderr (hook)")
 	)
 	flag.Var(&servers, "mcp", "MCP stdio server, repeatable: <name>=<command> [args...]")
 	flag.Parse()
@@ -134,6 +137,15 @@ func run() error {
 
 	ui := uicli.New(os.Stdin, os.Stdout)
 
+	// 生命周期钩子:功能扩展的统一缝隙(见 internal/hook 包契约)。
+	hooks := agent.NewHooks()
+	if *verbose {
+		installVerboseHooks(hooks)
+	}
+	if *confirmTool {
+		hooks.OnBeforeTool(ui.ConfirmHook())
+	}
+
 	// MCP 服务器:每个是一个 Provider;REPL UI 同时充当 MRTR 应答者。
 	var mcpProviders []*mcp.Provider
 	for _, s := range servers {
@@ -162,7 +174,7 @@ func run() error {
 
 	llmClient := llm.New(apiKey, baseURL, llmModel, *maxToks)
 	llmClient.AuthStyle = authStyle
-	ag := &agent.Agent{LLM: llmClient, Registry: registry, System: *system}
+	ag := &agent.Agent{LLM: llmClient, Registry: registry, System: *system, Hooks: hooks}
 
 	ui.Agent = ag // 两阶段装配:Responder(即 UI)先于 Agent 可用
 
@@ -175,6 +187,30 @@ func run() error {
 		return nil
 	}
 	return ui.Run(ctx)
+}
+
+// installVerboseHooks 把 LLM 轮次与工具调用的观测日志挂到 stderr。
+func installVerboseHooks(h *agent.Hooks) {
+	h.OnBeforeLLM(func(s agent.TurnStat) {
+		fmt.Fprintf(os.Stderr, "[llm] turn %d: messages=%d tools=%d\n", s.Turn, s.Messages, s.Tools)
+	})
+	h.OnAfterLLM(func(s agent.TurnStat) {
+		fmt.Fprintf(os.Stderr, "[llm] turn %d: stop=%s blocks=%d\n", s.Turn, s.StopReason, s.Blocks)
+	})
+	h.OnBeforeTool(func(c agent.ToolCall) agent.Decision {
+		fmt.Fprintf(os.Stderr, "[tool] %s(%s)\n", c.Name, string(c.Input))
+		return agent.Decision{}
+	})
+	h.OnAfterTool(func(o agent.ToolOutcome) {
+		status := "ok"
+		switch {
+		case o.Denied:
+			status = "denied"
+		case o.IsError:
+			status = "error"
+		}
+		fmt.Fprintf(os.Stderr, "[tool] %s -> %s (%s)\n", o.Name, status, o.Duration.Round(time.Millisecond))
+	})
 }
 
 func envFirst(names ...string) string {

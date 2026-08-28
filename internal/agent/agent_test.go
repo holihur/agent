@@ -170,3 +170,220 @@ func TestTextContent(t *testing.T) {
 		t.Fatalf("TextContent = %q", got)
 	}
 }
+
+// ---- 钩子集成 ----
+
+func TestRunHookEventFlow(t *testing.T) {
+	p := &fakeProvider{
+		tools:  []tools.ToolDef{{Name: "shell", Description: "d", InputSchema: map[string]any{"type": "object"}}},
+		result: tools.ToolResult{Text: "hello"},
+	}
+	fl := &fakeLLM{turns: []TurnResult{
+		{Assistant: Message{Role: RoleAssistant, Blocks: []Block{NewToolUse("tu_1", "shell", json.RawMessage(`{"command":"echo hi"}`))}}, StopReason: "tool_use"},
+		{Assistant: Message{Role: RoleAssistant, Blocks: []Block{NewText("done")}}, StopReason: "end_turn"},
+	}}
+	h := NewHooks()
+	var events []string
+	var outcome RunOutcome
+	h.OnRunStart(func(e UserInput) { events = append(events, "start") })
+	h.OnBeforeLLM(func(s TurnStat) { events = append(events, "beforeLLM") })
+	h.OnAfterLLM(func(s TurnStat) { events = append(events, "afterLLM:"+s.StopReason) })
+	h.OnBeforeTool(func(c ToolCall) Decision { events = append(events, "beforeTool:"+c.Name); return Decision{} })
+	h.OnAfterTool(func(o ToolOutcome) { events = append(events, "afterTool") })
+	h.OnRunEnd(func(o RunOutcome) { outcome = o; events = append(events, "end") })
+
+	ag := newTestAgent(t, fl, p)
+	ag.Hooks = h
+
+	answer, err := ag.Run(context.Background(), "run it")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"start", "beforeLLM", "afterLLM:tool_use", "beforeTool:shell", "afterTool", "beforeLLM", "afterLLM:end_turn", "end"}
+	if len(events) != len(want) {
+		t.Fatalf("events = %v, want %v", events, want)
+	}
+	for i := range want {
+		if events[i] != want[i] {
+			t.Fatalf("events = %v, want %v", events, want)
+		}
+	}
+	if outcome.Answer != "done" || outcome.Err != nil || outcome.Turns != 2 {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+	if answer != "done" {
+		t.Fatalf("answer = %q", answer)
+	}
+}
+
+func TestRunHookDenyBackfillsAsError(t *testing.T) {
+	p := &fakeProvider{
+		tools: []tools.ToolDef{{Name: "shell", Description: "d", InputSchema: map[string]any{"type": "object"}}},
+	}
+	fl := &fakeLLM{turns: []TurnResult{
+		{Assistant: Message{Role: RoleAssistant, Blocks: []Block{NewToolUse("tu_1", "shell", json.RawMessage(`{}`))}}, StopReason: "tool_use"},
+		{Assistant: Message{Role: RoleAssistant, Blocks: []Block{NewText("understood, not running it")}}, StopReason: "end_turn"},
+	}}
+	h := NewHooks()
+	var outcomes []ToolOutcome
+	h.OnBeforeTool(func(c ToolCall) Decision { return Decision{Deny: true, Reason: "not allowed"} })
+	h.OnAfterTool(func(o ToolOutcome) { outcomes = append(outcomes, o) })
+
+	ag := newTestAgent(t, fl, p)
+	ag.Hooks = h
+
+	if _, err := ag.Run(context.Background(), "go"); err != nil {
+		t.Fatal(err)
+	}
+	if len(outcomes) != 1 || !outcomes[0].Denied || outcomes[0].Duration != 0 {
+		t.Fatalf("outcomes = %+v", outcomes)
+	}
+	tb := ag.Messages[2].Blocks[0]
+	if !tb.IsError || tb.Content != "denied: not allowed" {
+		t.Fatalf("denial not backfilled: %+v", tb)
+	}
+	if p.gotName != "" {
+		t.Fatal("denied tool must not be executed")
+	}
+}
+
+func TestRunNilHooksStillWorks(t *testing.T) {
+	p := &fakeProvider{tools: []tools.ToolDef{{Name: "x", Description: "d", InputSchema: map[string]any{"type": "object"}}}}
+	fl := &fakeLLM{turns: []TurnResult{
+		{Assistant: Message{Role: RoleAssistant, Blocks: []Block{NewText("ok")}}, StopReason: "end_turn"},
+	}}
+	ag := newTestAgent(t, fl, p) // Hooks 保持 nil
+	if _, err := ag.Run(context.Background(), "hi"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// ---- Mutate 管道 ----
+
+func TestMutatePipelinesChain(t *testing.T) {
+	h := NewHooks()
+	var seen string
+	h.OnMutateUserInput(func(s string) string { return s + "-a" })
+	h.OnMutateUserInput(func(s string) string { seen = s; return s + "-b" })
+	h.OnMutateAnswer(func(s string) string { return "[" + s + "]" })
+
+	if got := h.chainUserInput("x"); got != "x-a-b" {
+		t.Fatalf("chained = %q", got)
+	}
+	if seen != "x-a" {
+		t.Fatalf("pipeline order broken: %q", seen)
+	}
+	if got := h.chainAnswer("done"); got != "[done]" {
+		t.Fatalf("answer = %q", got)
+	}
+}
+
+func TestMutateToolInputReachesProvider(t *testing.T) {
+	p := &fakeProvider{
+		tools:  []tools.ToolDef{{Name: "shell", Description: "d", InputSchema: map[string]any{"type": "object"}}},
+		result: tools.ToolResult{Text: "ok"},
+	}
+	fl := &fakeLLM{turns: []TurnResult{
+		{Assistant: Message{Role: RoleAssistant, Blocks: []Block{NewToolUse("tu_1", "shell", json.RawMessage(`{"command":"rm -rf /"}`))}}, StopReason: "tool_use"},
+		{Assistant: Message{Role: RoleAssistant, Blocks: []Block{NewText("done")}}, StopReason: "end_turn"},
+	}}
+	h := NewHooks()
+	h.OnMutateToolInput(func(c ToolCall) ToolCall {
+		c.Input = json.RawMessage(`{"command":"echo safe"}`)
+		return c
+	})
+	ag := newTestAgent(t, fl, p)
+	ag.Hooks = h
+
+	if _, err := ag.Run(context.Background(), "go"); err != nil {
+		t.Fatal(err)
+	}
+	if string(p.gotInput) != `{"command":"echo safe"}` {
+		t.Fatalf("provider saw %s", p.gotInput)
+	}
+}
+
+func TestMutateToolResultReachesBackfill(t *testing.T) {
+	p := &fakeProvider{
+		tools:  []tools.ToolDef{{Name: "shell", Description: "d", InputSchema: map[string]any{"type": "object"}}},
+		result: tools.ToolResult{Text: "secret: 12345"},
+	}
+	fl := &fakeLLM{turns: []TurnResult{
+		{Assistant: Message{Role: RoleAssistant, Blocks: []Block{NewToolUse("tu_1", "shell", json.RawMessage(`{}`))}}, StopReason: "tool_use"},
+		{Assistant: Message{Role: RoleAssistant, Blocks: []Block{NewText("ok")}}, StopReason: "end_turn"},
+	}}
+	h := NewHooks()
+	h.OnMutateToolResult(func(r tools.ToolResult) tools.ToolResult {
+		r.Text = "[redacted]"
+		return r
+	})
+	ag := newTestAgent(t, fl, p)
+	ag.Hooks = h
+
+	if _, err := ag.Run(context.Background(), "go"); err != nil {
+		t.Fatal(err)
+	}
+	if tb := ag.Messages[2].Blocks[0]; tb.Content != "[redacted]" {
+		t.Fatalf("backfill = %q", tb.Content)
+	}
+}
+
+func TestMutateTurnRequestEphemeralAndFiltersTools(t *testing.T) {
+	p := &fakeProvider{tools: []tools.ToolDef{
+		{Name: "shell", Description: "d", InputSchema: map[string]any{"type": "object"}},
+		{Name: "other", Description: "d", InputSchema: map[string]any{"type": "object"}},
+	}}
+	fl := &fakeLLM{turns: []TurnResult{
+		{Assistant: Message{Role: RoleAssistant, Blocks: []Block{NewText("ok")}}, StopReason: "end_turn"},
+	}}
+	h := NewHooks()
+	h.OnMutateTurnRequest(func(r TurnRequest) TurnRequest {
+		r.System = "mutated-system"
+		filtered := r.Tools[:0:0]
+		filtered = append(filtered, r.Tools...)
+		r.Tools = filtered[:1]
+		r.Messages = nil
+		return r
+	})
+	ag := newTestAgent(t, fl, p)
+	ag.Hooks = h
+
+	if _, err := ag.Run(context.Background(), "hi"); err != nil {
+		t.Fatal(err)
+	}
+	req := fl.called[0]
+	if req.System != "mutated-system" {
+		t.Fatalf("system = %q", req.System)
+	}
+	if len(req.Tools) != 1 || req.Tools[0].Name != "shell" {
+		t.Fatalf("tools = %+v", req.Tools)
+	}
+	// 持久状态不受出站 mutate 影响(契约)。
+	if len(ag.Messages) != 2 || ag.Messages[0].Blocks[0].Text != "hi" {
+		t.Fatalf("persistent messages mutated: %+v", ag.Messages)
+	}
+}
+
+func TestMutateAssistantBeforeHistory(t *testing.T) {
+	p := &fakeProvider{tools: []tools.ToolDef{{Name: "x", Description: "d", InputSchema: map[string]any{"type": "object"}}}}
+	fl := &fakeLLM{turns: []TurnResult{
+		{Assistant: Message{Role: RoleAssistant, Blocks: []Block{NewText("raw")}}, StopReason: "end_turn"},
+	}}
+	h := NewHooks()
+	h.OnMutateAssistant(func(m Message) Message {
+		return Message{Role: m.Role, Blocks: []Block{NewText("clean")}}
+	})
+	ag := newTestAgent(t, fl, p)
+	ag.Hooks = h
+
+	answer, err := ag.Run(context.Background(), "hi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if answer != "clean" {
+		t.Fatalf("answer = %q", answer)
+	}
+	if last := ag.Messages[1]; last.Blocks[0].Text != "clean" {
+		t.Fatalf("history = %+v", last)
+	}
+}
