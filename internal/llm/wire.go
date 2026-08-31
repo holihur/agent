@@ -99,8 +99,12 @@ func domainToWireBlock(b agent.Block) wireBlock {
 	if b.Type == agent.BlockToolUse {
 		if len(b.Input) == 0 {
 			w.Input = json.RawMessage("{}") // 协议要点 #4:入参必须是对象
-		} else {
+		} else if json.Valid(b.Input) {
 			w.Input = b.Input
+		} else {
+			// 损坏历史兜底(旧会话文件/钩子注入的非法入参):
+			// 保证请求编码永不因 RawMessage 炸掉,退化为空入参。
+			w.Input = json.RawMessage("{}")
 		}
 	}
 	if b.Type == agent.BlockText {

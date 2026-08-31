@@ -166,3 +166,54 @@ func apiErrOf(err error) *APIError {
 	}
 	return nil
 }
+
+// TestTurnStreamTruncatedToolInput 复现线上报错:
+// 流式 input_json_delta 累积出截断 JSON 且 content_block_stop 仍到达时,
+// 该 tool_use 必须 fail-loud,不得以非法 RawMessage 入史(否则下一轮
+// 请求编码/会话保存报 "unexpected end of JSON input")。
+func TestTurnStreamTruncatedToolInput(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"type":"message_start","message":{}}`,
+		``,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tu_1","name":"shell","input":{}}}`,
+		``,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"command\":"}}`,
+		``,
+		`data: {"type":"content_block_stop","index":0}`,
+		``,
+	}, "\n")
+	c := sseServer(t, body)
+
+	_, err := c.TurnStream(context.Background(), agent.TurnRequest{}, nil)
+	if err == nil {
+		t.Fatal("truncated tool input must fail the stream")
+	}
+	if !strings.Contains(err.Error(), "invalid tool_use input") {
+		t.Fatalf("err = %v, want clear invalid-tool-input error", err)
+	}
+}
+
+// TestTurnStreamEmptyToolInputDefaultsToObject 覆盖协议要点 #4:
+// 无任何 input_json_delta 时入参恒为 {}。
+func TestTurnStreamEmptyToolInputDefaultsToObject(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"type":"message_start","message":{}}`,
+		``,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tu_1","name":"shell","input":{}}}`,
+		``,
+		`data: {"type":"content_block_stop","index":0}`,
+		``,
+		`data: {"type":"message_delta","delta":{"stop_reason":"tool_use"}}`,
+		``,
+	}, "\n")
+	c := sseServer(t, body)
+
+	res, err := c.TurnStream(context.Background(), agent.TurnRequest{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tb := res.Assistant.Blocks[0]
+	if string(tb.Input) != "{}" {
+		t.Fatalf("empty input = %s, want {}", tb.Input)
+	}
+}

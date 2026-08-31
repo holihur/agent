@@ -136,7 +136,9 @@ func (s *streamAssembler) handle(payload string) error {
 	case "content_block_delta":
 		return s.applyDelta(ev.Delta)
 	case "content_block_stop":
-		s.finalizeBlock()
+		if err := s.finalizeBlock(); err != nil {
+			return err
+		}
 	case "message_delta":
 		if ev.Delta != nil {
 			s.stopReason = ev.Delta.StopReason
@@ -188,7 +190,10 @@ func (s *streamAssembler) applyDelta(d *wireDelta) error {
 }
 
 // finalize 把当前累积块落入 blocks(content_block_stop 时调用)。
-func (s *streamAssembler) finalizeBlock() {
+// tool_use 的 input 由 input_json_delta 拼装,可能是截断/非法 JSON
+// (max_tokens 截断、代理掐流等):必须 fail-loud,否则非法 RawMessage 入史后
+// 下一轮请求编码/会话保存都会报 "unexpected end of JSON input"。
+func (s *streamAssembler) finalizeBlock() error {
 	switch s.curType {
 	case "text":
 		s.blocks = append(s.blocks, agent.NewText(s.curText.String()))
@@ -201,7 +206,20 @@ func (s *streamAssembler) finalizeBlock() {
 		if strings.TrimSpace(input) == "" {
 			input = "{}" // 协议要点 #4:入参必须是对象
 		}
+		if !json.Valid([]byte(input)) {
+			return fmt.Errorf("llm: invalid tool_use input for tool %q: %s", s.curName, truncateJSON(input))
+		}
 		s.blocks = append(s.blocks, agent.NewToolUse(s.curID, s.curName, json.RawMessage(input)))
 	}
 	s.curType = ""
+	return nil
+}
+
+// truncateJSON 截短非法入参用于报错(避免把超长残片刷屏)。
+func truncateJSON(s string) string {
+	r := []rune(s)
+	if len(r) > 120 {
+		return string(r[:120]) + "…"
+	}
+	return s
 }
