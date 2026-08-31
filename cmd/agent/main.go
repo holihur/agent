@@ -29,6 +29,7 @@ import (
 	"agent/internal/mcp"
 	"agent/internal/tools"
 	uicli "agent/internal/ui/cli"
+	"agent/internal/utils"
 )
 
 // serverNameRe 与 tools 层命名空间校验保持一致(提前拦截,报错更友好)。
@@ -89,7 +90,7 @@ func run() error {
 	flag.Var(&servers, "mcp", "MCP stdio server, repeatable: <name>=<command> [args...]")
 	flag.Parse()
 
-	loadDotEnv(".env")
+	utils.LoadDotEnv(".env")
 
 	prefix := ""
 	if p := strings.TrimSpace(*provider); p != "" {

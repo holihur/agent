@@ -1,4 +1,4 @@
-package main
+package utils
 
 import (
 	"bufio"
@@ -6,9 +6,9 @@ import (
 	"strings"
 )
 
-// loadDotEnv 读取 KEY=VALUE 行注入环境变量;
+// LoadDotEnv 读取 KEY=VALUE 行注入环境变量;
 // 已存在的环境变量优先,.env 仅作兜底。文件不存在时静默跳过。
-func loadDotEnv(path string) {
+func LoadDotEnv(path string) {
 	f, err := os.Open(path)
 	if err != nil {
 		return
