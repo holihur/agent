@@ -14,9 +14,12 @@
 //	agent -agents-md off                         # 禁用 AGENTS.md 注入(auto 默认从 cwd 逐层向上发现)
 //	agent -skills off                            # 禁用技能扫描(默认扫描 cwd 下 .agents/skills/)
 //	agent -shell off                             # 禁用内置 shell 工具(模型不再能执行命令)
+//	agent -fs off                                # 禁用内置文件工具 read/write/edit(模型不再能直接读写文件)
 //	agent -shell-escape off                      # 禁用 REPL "!" shell 逃逸(仅用户手动触发,与 -shell 互不影响)
 //	agent -sessions                              # 列出已保存会话(cwd 下 .agent/sessions)
 //	agent -session work                          # 续接会话 work(不存在则新建),每轮自动保存
+//	agent -temperature 0.2                       # 采样温度(<0 = 端点默认)
+//	agent -reasoning-effort high                 # 推理力度透传(空 = 端点默认)
 //
 // MCP 服务器来源(可叠加,规范 docs/mcp.json.spec.md):
 //   - 文件:cwd 下 mcp.json(或 .mcp.json)的 mcpServers 对象(command=stdio / url=http)
@@ -196,7 +199,10 @@ func run() error {
 		model    = flag.String("model", "", "model override (default: LLM_MODEL or NAME_MODEL)")
 		maxToks  = flag.Int("max-tokens", 1024, "max_tokens per LLM turn")
 		maxTurns = flag.Int("max-turns", 60, "max think-act-observe turns per question (<=0 = default 60)")
+		temp     = flag.Float64("temperature", -1, "sampling temperature; <0 = endpoint default (main)")
+		effort   = flag.String("reasoning-effort", "", "reasoning effort passed through, e.g. low/medium/high; empty = endpoint default (main)")
 		shell    = flag.String("shell", "on", "builtin shell tool; off/none disables (main)")
+		fs       = flag.String("fs", "on", "builtin file tools read/write/edit; off/none disables (main)")
 		sessName = flag.String("session", "", "persistent session name: resume if exists, autosave each turn (main)")
 		sessList = flag.Bool("sessions", false, "list saved sessions and exit (main)")
 	)
@@ -207,6 +213,11 @@ func run() error {
 	case "", "on", "off", "none":
 	default:
 		return fmt.Errorf("-shell must be on or off/none, got %q", *shell)
+	}
+	switch *fs {
+	case "", "on", "off", "none":
+	default:
+		return fmt.Errorf("-fs must be on or off/none, got %q", *fs)
 	}
 
 	utils.LoadDotEnv(".env")
@@ -266,12 +277,15 @@ func run() error {
 
 	registry := tools.New()
 	// builtin 同时充当 hook 的进程内工具平面(如 skills 注册 skill 工具),
-	// -shell off 时保留空平面,只不注册 shell 工具。
+	// -shell/-fs off 时保留空平面,只不注册对应工具。
 	builtin := tools.NewLocal()
 	if *shell != "off" && *shell != "none" {
-		var err error
-		builtin, err = tools.NewBuiltin()
-		if err != nil {
+		if err := tools.RegisterShell(builtin); err != nil {
+			return err
+		}
+	}
+	if *fs != "off" && *fs != "none" {
+		if err := tools.RegisterFS(builtin); err != nil {
 			return err
 		}
 	}
@@ -328,6 +342,13 @@ func run() error {
 
 	llmClient := llm.New(apiKey, baseURL, llmModel, *maxToks)
 	llmClient.AuthStyle = authStyle
+	if *temp >= 0 {
+		if *temp > 1 {
+			return fmt.Errorf("-temperature must be in [0,1], got %v", *temp)
+		}
+		llmClient.Temperature = temp
+	}
+	llmClient.ReasoningEffort = *effort
 	ag := &agent.Agent{LLM: llmClient, Registry: registry, System: *system, Hooks: hooks, MaxTurns: *maxTurns}
 
 	ui.Agent = ag                       // 两阶段装配:Responder(即 UI)先于 Agent 可用

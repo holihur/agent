@@ -4,8 +4,8 @@
 //
 //	LLM_API_KEY=... LLM_BASE_URL=... LLM_MODEL=... go run ./examples/embedded
 //
-// 能力全部按需开启:进程内工具 Tool、MCP 服务器 MCP、内置 shell Shell,
-// 流式增量经 OnTextDelta 回调输出。
+// 能力全部按需开启:进程内工具 Tool、MCP 服务器 MCP、内置 shell Shell、
+// 内置文件工具 FS(read/write/edit,均支持批量)、流式增量经 OnTextDelta 回调输出。
 package main
 
 import (
@@ -36,6 +36,7 @@ func main() {
 
 	// 可选能力,按需开启:
 	//   _ = ag.Shell()
+	//   _ = ag.FS() // 内置文件工具 read/write/edit,支持批量
 	//   _ = ag.MCP(agent.MCPSpec{Name: "echo", Command: []string{"/tmp/echo-mcp"}})
 
 	ag.OnTextDelta(func(d agent.TextDelta) { fmt.Print(d.Text) })

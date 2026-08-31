@@ -68,7 +68,7 @@ go run ./cmd/agent -mcp "echo=http://127.0.0.1:8787/mcp" -q "用 now 工具告�
 LLM_API_KEY=... LLM_BASE_URL=... LLM_MODEL=... go run ./examples/embedded
 ```
 
-公开 API 见模块根的 `agent` 包文档(`New` / `Tool` / `MCP` / `Shell` / `OnTextDelta` / `Run` / `Close`)。
+公开 API 见模块根的 `agent` 包文档(`New` / `Tool` / `MCP` / `Shell` / `FS` / `OnTextDelta` / `Run` / `Close`)。
 
 ## 说明
 

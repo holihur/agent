@@ -200,8 +200,10 @@ func TestShellArgumentValidation(t *testing.T) {
 }
 
 func TestBuiltinSingleTool(t *testing.T) {
-	p, err := NewBuiltin()
-	if err != nil {
+	// 单独注册 shell 时平面只有 shell 一个工具(NewBuiltin 还会带上 read/write/edit,
+	// 见 TestNewBuiltinIncludesFS)。
+	p := NewLocal()
+	if err := RegisterShell(p); err != nil {
 		t.Fatal(err)
 	}
 	defs, err := p.ListTools(context.Background())

@@ -2,7 +2,7 @@
 // agent,无需 CLI、REPL 或 flag 解析。
 //
 // 设计原则:不堆参数。凭据与模型走 Config 字段或 env(LLM_API_KEY / LLM_BASE_URL /
-// LLM_MODEL / LLM_AUTH_STYLE),全部可选;能力(shell、MCP、进程内工具、流式)
+// LLM_MODEL / LLM_AUTH_STYLE),全部可选;能力(shell、FS 文件工具、MCP、进程内工具、流式)
 // 一律经方法显式开启。本包只做装配与类型转发,循环/工具/协议实现保留在
 // internal/ 中,分层纪律不变;cmd/agent 的 CLI 装配不受影响。
 package agent
@@ -163,6 +163,12 @@ func (a *Agent) MCP(spec MCPSpec) error {
 // 嵌入式默认不开启;重复开启报错。
 func (a *Agent) Shell() error {
 	return tools.RegisterShell(a.local)
+}
+
+// FS 开启内置文件工具(read/write/edit,均支持批量:一次调用处理多个文件)。
+// 嵌入式默认不开启;重复开启报错。
+func (a *Agent) FS() error {
+	return tools.RegisterFS(a.local)
 }
 
 // OnTextDelta 注册流式文本增量消费者;nil 取消。适配器支持流式时每轮生效。

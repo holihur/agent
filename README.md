@@ -48,6 +48,7 @@ _ = ag.Tool("now", "Returns the current time in RFC3339.",
     })
 _ = ag.MCP(agent.MCPSpec{Name: "echo", Command: []string{"/tmp/echo-mcp"}})
 _ = ag.Shell() // 内置 shell 工具默认关闭,按需开启
+_ = ag.FS()    // 内置文件工具 read/write/edit,默认关闭,按需开启(均支持批量)
 
 ag.OnTextDelta(func(d agent.TextDelta) { fmt.Print(d.Text) })
 answer, err := ag.Run(context.Background(), "现在几点了?用 now 工具回答")
@@ -66,6 +67,16 @@ agent -skills .agents/skills  # 默认;可改为其他目录(相对 cwd 或绝�
 agent -skills off             # 禁用
 ```
 
+## 内置文件工具
+
+三个内置工具 read / write / edit,均支持批量(一次调用处理多个文件):
+
+- `read`: 传 `paths` 数组批量读,可选 `offset`/`limit`(1-based 行号)分段读大文件;每文件独立成败。
+- `write`: 传 `files: [{path, content}]` 批量写,自动创建父目录,覆盖已有文件。
+- `edit`: 传 `edits: [{path, oldText, newText}]` 批量做精确替换;同文件按序应用(支持链式),任一 `oldText` 缺失或不唯一则整批不落盘(原子)。
+
+文件读写优先用这三个工具;shell 留给 git/grep/构建/列目录等命令。
+
 ## Shell 开关
 
 两个独立的 shell 入口,分别用各自的 flag 禁用(`off`/`none` 均可):
@@ -73,4 +84,5 @@ agent -skills off             # 禁用
 ```bash
 agent -shell off        # 禁用内置 shell 工具:模型不再能执行命令(MCP/skill 工具不受影响)
 agent -shell-escape off # 禁用 REPL 的 "!" shell 逃逸:仅影响用户手动 !cmd,与 -shell 互不影响
+agent -fs off           # 禁用内置文件工具 read/write/edit:模型不再能直接读写文件
 ```

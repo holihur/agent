@@ -62,20 +62,24 @@ func (p *LocalProvider) CallTool(ctx context.Context, name string, input json.Ra
 	return ToolResult{Text: text}, nil
 }
 
-// ---- 内置工具:shell 一个走天下 ----
+// ---- 内置工具:shell + 文件工具(read/write/edit) ----
 //
 // 以 agent 进程权限运行,无沙箱,面向本地个人使用。
-// 读文件/写文件/列目录/git/grep/构建 全部经由 shell 命令完成。
+// git/grep/构建/列目录 经 shell 命令完成;
+// 读文件/写文件/改文件 优先用 read/write/edit(三者均支持批量)。
 
 const maxShellOutput = 64 << 10 // 输出上限(stdout/stderr 各自截断)
 
 // shellTimeout 是命令超时(var 以便测试覆盖)。
 var shellTimeout = 30 * time.Second
 
-// NewBuiltin 返回预置工具的 LocalProvider:仅 shell 一个工具。
+// NewBuiltin 返回预置工具的 LocalProvider:shell + 文件工具(read/write/edit,均支持批量)。
 func NewBuiltin() (*LocalProvider, error) {
 	p := NewLocal()
 	if err := RegisterShell(p); err != nil {
+		return nil, err
+	}
+	if err := RegisterFS(p); err != nil {
 		return nil, err
 	}
 	return p, nil
@@ -86,7 +90,7 @@ func NewBuiltin() (*LocalProvider, error) {
 func RegisterShell(p *LocalProvider) error {
 	return p.Register(ToolDef{
 		Name:        "shell",
-		Description: fmt.Sprintf("Runs a shell command via `sh -c` with a %s timeout. Non-zero exit codes are reported in the result (not treated as tool failure). Use it for git, grep, builds, reading/writing files, listing directories, etc.", shellTimeout),
+		Description: fmt.Sprintf("Runs a shell command via `sh -c` with a %s timeout. Non-zero exit codes are reported in the result (not treated as tool failure). Use it for git, grep, builds, listing directories, etc. Prefer the read/write/edit tools for reading and modifying files.", shellTimeout),
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
