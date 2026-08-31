@@ -3,5 +3,5 @@
 ## 安装
 
 ```bash
-go install ./cmd/agent
+go install github.com/holihur/agent/cmd/agent@latest
 ```
