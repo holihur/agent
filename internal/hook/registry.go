@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	"github.com/holihur/agent/internal/agent"
+	"github.com/holihur/agent/internal/tools"
 )
 
 // Installer 是一个功能的钩子装配动作:把该功能的钩子注册到 h 上。
@@ -16,8 +17,9 @@ type Installer func(h *agent.Hooks, d Deps) error
 
 // Deps 是全部安装器共享的装配依赖;字段增长需保持与具体功能解耦。
 type Deps struct {
-	CWD string    // 启动工作目录(逐层发现类功能用)
-	UI  ConfirmUI // 会话界面;nil = 不装需要用户交互的功能
+	CWD   string               // 启动工作目录(逐层发现类功能用)
+	UI    ConfirmUI            // 会话界面;nil = 不装需要用户交互的功能
+	Tools *tools.LocalProvider // 进程内工具平面("local" 命名空间);nil = 不装需要注册工具的功能
 }
 
 // ConfirmUI 由会话 UI 实现,为 confirm-tool 提供逐次放行裁决。
