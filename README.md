@@ -56,6 +56,26 @@ answer, err := ag.Run(context.Background(), "现在几点了?用 now 工具回�
 
 完整示例见 [examples/embedded](examples/README.md)。
 
+## 终端 Markdown 渲染(Streamdown Go 版)
+
+[pkg/streamdown](pkg/streamdown) 是 [day50-dev/render-markdown-terminal](https://github.com/day50-dev/render-markdown-terminal)
+(Streamdown)的 Go 移植:把 markdown 流式渲染成带 ANSI 颜色的终端文本,
+支持流式增量输出(LLM token 边到边渲染)。
+
+```go
+import "github.com/holihur/agent/pkg/streamdown"
+
+r, _ := streamdown.New(os.Stdout) // 默认调色板与排版,0 值 Config 即全默认
+r.RenderString(markdown)          // 或 r.Render(io.Reader) 流式读取
+r.Tidyup()                        // 收尾:复位终端,可选 OSC 52 剪贴板
+```
+
+特性与上游一致:HSV 推导真彩调色板、CJK 感知换行(宽度表与 Python wcwidth 逐字节一致)、
+表格/列表(含嵌套)/引用/标题(ATX+setext)/分隔线/代码块(``` 与 4 空格缩进,
+chroma 语法高亮,▄/▀ 半块边衬)、行内样式(粗体/斜体/删除线/下划线/行内代码/上标脚注)、
+OSC 8 超链接。差异:`Config` 零值安全(`DefaultConfig()` 见包文档);语法高亮用
+chroma 而非 pygments(颜色有出入,结构一致);镜像内嵌协议不支持,图片回退为 alt 文本。
+
 ## Skills
 
 启动时扫描 cwd 下的 `.agents/skills/`:每个 `<name>/SKILL.md` 即一个技能
@@ -85,6 +105,17 @@ agent -skills off             # 禁用
 agent -shell off        # 禁用内置 shell 工具:模型不再能执行命令(MCP/skill 工具不受影响)
 agent -shell-escape off # 禁用 REPL 的 "!" shell 逃逸:仅影响用户手动 !cmd,与 -shell 互不影响
 agent -fs off           # 禁用内置文件工具 read/write/edit:模型不再能直接读写文件
+```
+
+## Markdown 渲染
+
+回答(流式与一次性)默认经 `pkg/streamdown` 渲染成带 ANSI 颜色的终端 markdown
+(标题/表格/列表/引用/代码块等,见上节)。`auto` 下仅在输出为 TTY 时开启:
+
+```bash
+agent -markdown on     # 强制开启(管道输出也渲染)
+agent -markdown off    # 关闭,原文直出
+agent -markdown auto   # 默认:stdout 为 TTY 时开启
 ```
 
 ## REPL 命令
