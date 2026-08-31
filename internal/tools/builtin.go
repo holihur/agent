@@ -75,7 +75,16 @@ var shellTimeout = 30 * time.Second
 // NewBuiltin 返回预置工具的 LocalProvider:仅 shell 一个工具。
 func NewBuiltin() (*LocalProvider, error) {
 	p := NewLocal()
-	err := p.Register(ToolDef{
+	if err := RegisterShell(p); err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+// RegisterShell 把内置 shell 工具注册到给定的进程内工具平面。
+// 供 NewBuiltin 与嵌入式门面(agent.Shell)共享同一实现。
+func RegisterShell(p *LocalProvider) error {
+	return p.Register(ToolDef{
 		Name:        "shell",
 		Description: fmt.Sprintf("Runs a shell command via `sh -c` with a %s timeout. Non-zero exit codes are reported in the result (not treated as tool failure). Use it for git, grep, builds, reading/writing files, listing directories, etc.", shellTimeout),
 		InputSchema: map[string]any{
@@ -89,10 +98,6 @@ func NewBuiltin() (*LocalProvider, error) {
 			"required": []string{"command"},
 		},
 	}, toolShell)
-	if err != nil {
-		return nil, err
-	}
-	return p, nil
 }
 
 func toolShell(_ context.Context, input json.RawMessage) (string, error) {
