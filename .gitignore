@@ -2,3 +2,11 @@
 .env
 AGENTS.md
 .mcp.json
+
+# npx skills 安装产物(本机技能缓存,可用 skills-lock.json 还原)
+.agents/
+.claude/
+skills-lock.json
+
+# go build ./... 产物 / skills CLI 误检生成的根级 agent 目录(勿匹配 cmd/agent)
+/agent
