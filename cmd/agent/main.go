@@ -16,6 +16,7 @@
 //	agent -shell off                             # 禁用内置 shell 工具(模型不再能执行命令)
 //	agent -fs off                                # 禁用内置文件工具 read/write/edit(模型不再能直接读写文件)
 //	agent -shell-escape off                      # 禁用 REPL "!" shell 逃逸(仅用户手动触发,与 -shell 互不影响)
+//	agent -slashcmd off                             # 禁用 REPL "/" 命令(/help 打印帮助文档,与 -shell 互不影响)
 //	agent -sessions                              # 列出已保存会话(cwd 下 .agent/sessions)
 //	agent -session work                          # 续接会话 work(不存在则新建),每轮自动保存
 //	agent -temperature 0.2                       # 采样温度(<0 = 端点默认)
@@ -55,6 +56,7 @@ import (
 	_ "github.com/holihur/agent/internal/hook/confirm"
 	_ "github.com/holihur/agent/internal/hook/shell"
 	_ "github.com/holihur/agent/internal/hook/skills"
+	_ "github.com/holihur/agent/internal/hook/slashcmd"
 	_ "github.com/holihur/agent/internal/hook/verbose"
 )
 

@@ -100,7 +100,9 @@ func (u *UI) TextDeltaSink() func(agent.TextDelta) {
 }
 
 // Run 启动 REPL:"> " 提示 → 读行 → agent.Run → 打印。
-// exit/quit/Ctrl-D 退出;Ctrl-C 清空当前行;单轮致命错误只打印不退出。
+// exit/quit//exit//quit/Ctrl-D 退出;Ctrl-C 清空当前行;单轮致命错误只打印不退出。
+// "/" 命令(/help 等)由 slashcmd hook 在 Agent.Run 内拦截;/exit /quit 属
+// REPL 循环控制,在这里直接退出。
 func (u *UI) Run(ctx context.Context) error {
 	u.startRL()
 	defer u.stopRL()
@@ -120,7 +122,7 @@ func (u *UI) Run(ctx context.Context) error {
 		if line == "" {
 			continue
 		}
-		if line == "exit" || line == "quit" {
+		if line == "exit" || line == "quit" || line == "/exit" || line == "/quit" {
 			return nil
 		}
 		if u.Agent == nil {

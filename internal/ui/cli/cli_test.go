@@ -37,6 +37,20 @@ func TestScannerFallbackEOF(t *testing.T) {
 	}
 }
 
+func TestScannerFallbackSlashExit(t *testing.T) {
+	// "/exit" 与 "/quit" 属于 REPL 循环控制,直接退出、不进对话循环。
+	for _, line := range []string{"/exit", "/quit"} {
+		var out bytes.Buffer
+		ui := New(strings.NewReader(line+"\n"), &out)
+		if err := ui.Run(context.Background()); err != nil {
+			t.Fatalf("%s: Run: %v", line, err)
+		}
+		if strings.Contains(out.String(), "error:") {
+			t.Fatalf("%s: unexpected error output: %q", line, out.String())
+		}
+	}
+}
+
 func TestRespondCollectsFields(t *testing.T) {
 	var out bytes.Buffer
 	ui := New(strings.NewReader("octocat\n\n"), &out)

@@ -86,3 +86,15 @@ agent -shell off        # 禁用内置 shell 工具:模型不再能执行命令(
 agent -shell-escape off # 禁用 REPL 的 "!" shell 逃逸:仅影响用户手动 !cmd,与 -shell 互不影响
 agent -fs off           # 禁用内置文件工具 read/write/edit:模型不再能直接读写文件
 ```
+
+## REPL 命令
+
+交互模式下,以 `/` 开头的输入按命令处理(拦截在对话循环之前,不进历史、不调模型):
+
+```bash
+/help        # 打印帮助文档(列出全部 REPL 命令)
+/exit /quit  # 退出(裸 exit/quit 亦可)
+!cmd         # shell 逃逸,如 !git status(见上节)
+```
+
+未知命令给出 `unknown command` 提示并指向 `/help`。`agent -slashcmd off` 可整体禁用 `/` 命令。
