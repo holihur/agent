@@ -12,6 +12,7 @@
 //	agent -mcp "fs=npx @modelcontextprotocol/server-filesystem /tmp"
 //	agent -q "3+5 等于几" -mcp "gh=gh-mcp-server"  # 一次性执行
 //	agent -agents-md off                         # 禁用 AGENTS.md 注入(auto 默认从 cwd 逐层向上发现)
+//	agent -skills off                            # 禁用技能扫描(默认扫描 cwd 下 .agents/skills/)
 //
 // MCP 服务器来源(可叠加,规范 docs/mcp.json.spec.md):
 //   - 文件:cwd 下 mcp.json(或 .mcp.json)的 mcpServers 对象(command=stdio / url=http)
@@ -44,6 +45,7 @@ import (
 	_ "github.com/holihur/agent/internal/hook/agentsmd"
 	_ "github.com/holihur/agent/internal/hook/confirm"
 	_ "github.com/holihur/agent/internal/hook/shell"
+	_ "github.com/holihur/agent/internal/hook/skills"
 	_ "github.com/holihur/agent/internal/hook/verbose"
 )
 
@@ -247,8 +249,9 @@ func run() error {
 
 	// 生命周期钩子:每个 hook 是 internal/hook/ 下一个子包,init 自注册,
 	// 上方 blank-import 激活;这里只统一装配 InstallAll。
+	// builtin 同时充当 hook 的进程内工具平面(如 skills 注册 skill 工具)。
 	hooks := agent.NewHooks()
-	if err := hook.InstallAll(hooks, hook.Deps{CWD: cwd, UI: ui}); err != nil {
+	if err := hook.InstallAll(hooks, hook.Deps{CWD: cwd, UI: ui, Tools: builtin}); err != nil {
 		return err
 	}
 
