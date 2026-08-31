@@ -23,14 +23,15 @@ import (
 //   - 载荷中的切片不得原地修改(以返回新切片表达变更)。
 //
 // 所有方法 nil 安全(Hooks 允许为 nil);Mutate 管道与观测按注册顺序执行,
-// BeforeTool 首个 Deny 短路。
+// InterceptUserInput 与 BeforeTool 均为首个命中/首个 Deny 短路。
 type Hooks struct {
-	mutateUserInput   []func(string) string
-	mutateTurnRequest []func(TurnRequest) TurnRequest
-	mutateToolInput   []func(ToolCall) ToolCall
-	mutateToolResult  []func(tools.ToolResult) tools.ToolResult
-	mutateAssistant   []func(Message) Message
-	mutateAnswer      []func(string) string
+	interceptUserInput []func(string) (output string, handled bool)
+	mutateUserInput    []func(string) string
+	mutateTurnRequest  []func(TurnRequest) TurnRequest
+	mutateToolInput    []func(ToolCall) ToolCall
+	mutateToolResult   []func(tools.ToolResult) tools.ToolResult
+	mutateAssistant    []func(Message) Message
+	mutateAnswer       []func(string) string
 
 	beforeTool []func(ToolCall) Decision
 
@@ -89,6 +90,14 @@ type RunOutcome struct {
 }
 
 // ---- 注册 ----
+
+// OnInterceptUserInput 注册输入拦截器:返回 handled=true 表示本次输入已被
+// 完整处理(如 REPL 的 "!" shell 逃逸),Agent 不再进对话循环。
+func (h *Hooks) OnInterceptUserInput(fn func(string) (output string, handled bool)) {
+	if h != nil {
+		h.interceptUserInput = append(h.interceptUserInput, fn)
+	}
+}
 
 func (h *Hooks) OnMutateUserInput(fn func(string) string) {
 	if h != nil {
@@ -163,6 +172,19 @@ func (h *Hooks) OnRunEnd(fn func(RunOutcome)) {
 }
 
 // ---- 分发(nil 安全;包内使用) ----
+
+// interceptInput 依次询问拦截器,首个声明"已处理"的短路返回其输出。
+func (h *Hooks) interceptInput(v string) (string, bool) {
+	if h == nil {
+		return "", false
+	}
+	for _, fn := range h.interceptUserInput {
+		if out, handled := fn(v); handled {
+			return out, true
+		}
+	}
+	return "", false
+}
 
 func (h *Hooks) chainUserInput(v string) string {
 	if h == nil {

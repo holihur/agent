@@ -36,12 +36,17 @@ type Agent struct {
 }
 
 // Run 执行一轮完整"思考-行动-观察"循环,返回最终文本回答。
+// 输入拦截器(如 "!" shell 逃逸)命中的输入不进对话:既不调模型也不写历史。
 //
 // 错误分诊(设计 v2 第五节):
 //   - 工具执行失败/被钩子拒绝 → 不是 error,转为 is_error 的 tool_result 回填(模型消化);
 //   - LLM 调用失败 / 列工具失败 / 超循环上限 → 致命 error 冒泡。
 func (a *Agent) Run(ctx context.Context, user string) (string, error) {
 	a.Hooks.emitRunStart(UserInput{Text: user})
+	if out, handled := a.Hooks.interceptInput(user); handled {
+		a.Hooks.emitRunEnd(RunOutcome{Answer: out, Turns: 0})
+		return out, nil
+	}
 	user = a.Hooks.chainUserInput(user)
 	a.Messages = append(a.Messages, Message{Role: RoleUser, Blocks: []Block{NewText(user)}})
 	limit := a.maxTurnsLimit()

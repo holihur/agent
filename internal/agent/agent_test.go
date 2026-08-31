@@ -295,6 +295,64 @@ func TestRunNilHooksStillWorks(t *testing.T) {
 	}
 }
 
+func TestRunInterceptedInputBypassesLLM(t *testing.T) {
+	p := &fakeProvider{tools: []tools.ToolDef{{Name: "x", Description: "d", InputSchema: map[string]any{"type": "object"}}}}
+	fl := &fakeLLM{} // 被调用即返回 "script exhausted" 错误
+	h := NewHooks()
+	var events []string
+	var outcome RunOutcome
+	h.OnRunStart(func(e UserInput) { events = append(events, "start") })
+	h.OnInterceptUserInput(func(s string) (string, bool) {
+		if !strings.HasPrefix(s, "!") {
+			return "", false
+		}
+		return "shell:" + s[1:], true
+	})
+	h.OnRunEnd(func(o RunOutcome) { outcome = o; events = append(events, "end") })
+
+	ag := newTestAgent(t, fl, p)
+	ag.Hooks = h
+
+	answer, err := ag.Run(context.Background(), "!ls")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if answer != "shell:ls" {
+		t.Fatalf("answer = %q", answer)
+	}
+	if len(fl.called) != 0 {
+		t.Fatal("intercepted run must not call the LLM")
+	}
+	if len(ag.Messages) != 0 {
+		t.Fatalf("intercepted input must not enter history: %+v", ag.Messages)
+	}
+	if len(events) != 2 || events[0] != "start" || events[1] != "end" {
+		t.Fatalf("events = %v, want [start end]", events)
+	}
+	if outcome.Turns != 0 || outcome.Answer != "shell:ls" || outcome.Err != nil {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+}
+
+func TestRunNonInterceptedInputStillRuns(t *testing.T) {
+	p := &fakeProvider{tools: []tools.ToolDef{{Name: "x", Description: "d", InputSchema: map[string]any{"type": "object"}}}}
+	fl := &fakeLLM{turns: []TurnResult{
+		{Assistant: Message{Role: RoleAssistant, Blocks: []Block{NewText("ok")}}, StopReason: "end_turn"},
+	}}
+	h := NewHooks()
+	h.OnInterceptUserInput(func(s string) (string, bool) { return "", false })
+
+	ag := newTestAgent(t, fl, p)
+	ag.Hooks = h
+
+	if _, err := ag.Run(context.Background(), "hi"); err != nil {
+		t.Fatal(err)
+	}
+	if len(fl.called) != 1 {
+		t.Fatalf("llm calls = %d, want 1", len(fl.called))
+	}
+}
+
 // ---- Mutate 管道 ----
 
 func TestMutatePipelinesChain(t *testing.T) {
