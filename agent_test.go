@@ -3,11 +3,13 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
 	core "github.com/holihur/agent/internal/agent"
 	"github.com/holihur/agent/internal/llm"
+	"github.com/holihur/agent/internal/session"
 )
 
 // stubLLM 记录收到的 TurnRequest,返回预置结果;经包内字段注入 inner。
@@ -184,5 +186,109 @@ func TestRunRoutesThroughRegistry(t *testing.T) {
 	}
 	if len(stub.got.Tools) != 1 || stub.got.Tools[0].Name != "now" {
 		t.Fatalf("tools = %+v, want [now]", stub.got.Tools)
+	}
+}
+
+func TestSessionDefaultStore(t *testing.T) {
+	envCreds(t)
+	a, err := New()
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer a.Close()
+	if _, ok := a.sessions.(*session.FileStore); !ok {
+		t.Fatalf("default store = %T, want *session.FileStore", a.sessions)
+	}
+}
+
+func TestSessionPersistenceRoundTrip(t *testing.T) {
+	envCreds(t)
+	a, err := New(Config{Sessions: session.NewFileStore(t.TempDir())})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer a.Close()
+	a.inner.LLM = &stubLLM{resp: core.TurnResult{
+		Assistant:  core.Message{Role: core.RoleAssistant, Blocks: []core.Block{core.NewText("ok")}},
+		StopReason: "end_turn",
+	}}
+	if _, err := a.Run(context.Background(), "hi"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(a.inner.Messages) != 2 {
+		t.Fatalf("messages = %d, want 2", len(a.inner.Messages))
+	}
+
+	if err := a.SaveSession("work"); err != nil {
+		t.Fatalf("SaveSession: %v", err)
+	}
+	a.NewSession()
+	if len(a.inner.Messages) != 0 {
+		t.Fatal("NewSession must clear history")
+	}
+	if err := a.LoadSession("work"); err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if len(a.inner.Messages) != 2 {
+		t.Fatalf("restored messages = %d, want 2", len(a.inner.Messages))
+	}
+
+	names, err := a.SessionNames()
+	if err != nil {
+		t.Fatalf("SessionNames: %v", err)
+	}
+	if len(names) != 1 || names[0] != "work" {
+		t.Fatalf("names = %v, want [work]", names)
+	}
+	if err := a.DeleteSession("work"); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if err := a.LoadSession("work"); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("load deleted err = %v, want ErrSessionNotFound", err)
+	}
+}
+
+type memStore struct{ data map[string][]core.Message }
+
+func (m *memStore) Save(_ context.Context, name string, msgs []core.Message) error {
+	m.data[name] = msgs
+	return nil
+}
+
+func (m *memStore) Load(_ context.Context, name string) ([]core.Message, error) {
+	msgs, ok := m.data[name]
+	if !ok {
+		return nil, core.ErrSessionNotFound
+	}
+	return msgs, nil
+}
+
+func (m *memStore) Names(context.Context) ([]string, error) {
+	out := make([]string, 0, len(m.data))
+	for k := range m.data {
+		out = append(out, k)
+	}
+	return out, nil
+}
+
+func (m *memStore) Delete(_ context.Context, name string) error {
+	delete(m.data, name)
+	return nil
+}
+
+func TestSessionCustomStore(t *testing.T) {
+	envCreds(t)
+	store := &memStore{data: map[string][]core.Message{}}
+	a, err := New(Config{Sessions: store})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer a.Close()
+	a.inner.Messages = []core.Message{{Role: core.RoleUser, Blocks: []core.Block{core.NewText("hi")}}}
+	if err := a.SaveSession("mem"); err != nil {
+		t.Fatalf("SaveSession: %v", err)
+	}
+	if len(store.data["mem"]) != 1 {
+		t.Fatal("custom store must receive the history")
 	}
 }

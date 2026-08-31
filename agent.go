@@ -19,11 +19,19 @@ import (
 	core "github.com/holihur/agent/internal/agent"
 	"github.com/holihur/agent/internal/llm"
 	"github.com/holihur/agent/internal/mcp"
+	"github.com/holihur/agent/internal/session"
 	"github.com/holihur/agent/internal/tools"
 )
 
 // TextDelta 是流式输出的文本增量(转发核心域同名类型)。
 type TextDelta = core.TextDelta
+
+// SessionStore 是会话持久化 port(转发核心域同名接口):
+// 宿主可自定义实现(如 Redis/SQLite),默认用文件存储。
+type SessionStore = core.SessionStore
+
+// ErrSessionNotFound 表示指定会话不存在(转发核心域哨兵;用 errors.Is 判定)。
+var ErrSessionNotFound = core.ErrSessionNotFound
 
 // ToolFunc 是进程内工具的执行函数:入参为模型给出的 JSON 对象,返回回填文本。
 // 返回 error 视为工具失败(转为 is_error 回填,不打断循环)。
@@ -41,13 +49,14 @@ type MCPSpec struct {
 
 // Config 是可选装配配置:全部字段零值安全(空值回落 env 或内置默认)。
 type Config struct {
-	APIKey    string // 空 → env LLM_API_KEY / LLM_APIKEY
-	BaseURL   string // 空 → env LLM_BASE_URL(Anthropic 兼容端点)
-	Model     string // 空 → env LLM_MODEL
-	AuthStyle string // 空 → env LLM_AUTH_STYLE;bearer(默认) | x-api-key | both
-	System    string // 空 → 不注入 system prompt
-	MaxTokens int    // 0 → 1024
-	MaxTurns  int    // 0 → 默认 60
+	APIKey    string       // 空 → env LLM_API_KEY / LLM_APIKEY
+	BaseURL   string       // 空 → env LLM_BASE_URL(Anthropic 兼容端点)
+	Model     string       // 空 → env LLM_MODEL
+	AuthStyle string       // 空 → env LLM_AUTH_STYLE;bearer(默认) | x-api-key | both
+	System    string       // 空 → 不注入 system prompt
+	MaxTokens int          // 0 → 1024
+	MaxTurns  int          // 0 → 默认 60
+	Sessions  SessionStore // nil → 默认文件存储(cwd 下 .agent/sessions)
 }
 
 // Agent 是嵌入式 agent 门面:New 构造,Tool/MCP/Shell 按需挂载,Run 驱动,
@@ -56,6 +65,7 @@ type Agent struct {
 	inner     *core.Agent
 	registry  *tools.Registry
 	local     *tools.LocalProvider
+	sessions  core.SessionStore
 	providers []*mcp.Provider // 经 MCP() 挂载的连接;Close 统一释放
 }
 
@@ -89,6 +99,10 @@ func New(cfg ...Config) (*Agent, error) {
 	}
 	client := llm.New(apiKey, baseURL, model, c.MaxTokens)
 	client.AuthStyle = authStyle
+	sessions := c.Sessions
+	if sessions == nil {
+		sessions = session.NewFileStore(".agent/sessions")
+	}
 	return &Agent{
 		inner: &core.Agent{
 			LLM:      client,
@@ -99,6 +113,7 @@ func New(cfg ...Config) (*Agent, error) {
 		},
 		registry: registry,
 		local:    local,
+		sessions: sessions,
 	}, nil
 }
 
@@ -177,6 +192,36 @@ func (a *Agent) Close() error {
 	}
 	a.providers = nil
 	return first
+}
+
+// SaveSession 把当前对话历史持久化为命名会话(整体替换同名旧会话)。
+func (a *Agent) SaveSession(name string) error {
+	return a.sessions.Save(context.Background(), name, a.inner.Messages)
+}
+
+// LoadSession 载入命名会话并替换当前对话历史(当前历史不保存,需要则先 SaveSession)。
+func (a *Agent) LoadSession(name string) error {
+	msgs, err := a.sessions.Load(context.Background(), name)
+	if err != nil {
+		return err
+	}
+	a.inner.Messages = msgs
+	return nil
+}
+
+// SessionNames 列出全部已持久化的会话名(按名字排序)。
+func (a *Agent) SessionNames() ([]string, error) {
+	return a.sessions.Names(context.Background())
+}
+
+// DeleteSession 删除命名会话;不存在时返回包装的 ErrSessionNotFound。
+func (a *Agent) DeleteSession(name string) error {
+	return a.sessions.Delete(context.Background(), name)
+}
+
+// NewSession 清空当前对话历史,从零开始(已持久化的会话不受影响)。
+func (a *Agent) NewSession() {
+	a.inner.Messages = nil
 }
 
 // noopResponder 是无宿主交互时的默认追问应答者:一律拒绝(fail-fast 语义)。

@@ -15,6 +15,8 @@
 //	agent -skills off                            # 禁用技能扫描(默认扫描 cwd 下 .agents/skills/)
 //	agent -shell off                             # 禁用内置 shell 工具(模型不再能执行命令)
 //	agent -shell-escape off                      # 禁用 REPL "!" shell 逃逸(仅用户手动触发,与 -shell 互不影响)
+//	agent -sessions                              # 列出已保存会话(cwd 下 .agent/sessions)
+//	agent -session work                          # 续接会话 work(不存在则新建),每轮自动保存
 //
 // MCP 服务器来源(可叠加,规范 docs/mcp.json.spec.md):
 //   - 文件:cwd 下 mcp.json(或 .mcp.json)的 mcpServers 对象(command=stdio / url=http)
@@ -24,6 +26,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -39,6 +42,7 @@ import (
 	"github.com/holihur/agent/internal/hook"
 	"github.com/holihur/agent/internal/llm"
 	"github.com/holihur/agent/internal/mcp"
+	"github.com/holihur/agent/internal/session"
 	"github.com/holihur/agent/internal/tools"
 	uicli "github.com/holihur/agent/internal/ui/cli"
 	"github.com/holihur/agent/internal/utils"
@@ -193,6 +197,8 @@ func run() error {
 		maxToks  = flag.Int("max-tokens", 1024, "max_tokens per LLM turn")
 		maxTurns = flag.Int("max-turns", 60, "max think-act-observe turns per question (<=0 = default 60)")
 		shell    = flag.String("shell", "on", "builtin shell tool; off/none disables (main)")
+		sessName = flag.String("session", "", "persistent session name: resume if exists, autosave each turn (main)")
+		sessList = flag.Bool("sessions", false, "list saved sessions and exit (main)")
 	)
 	flag.Var(&servers, "mcp", "MCP stdio server, repeatable: <name>=<command> [args...]")
 	flag.Parse()
@@ -204,6 +210,19 @@ func run() error {
 	}
 
 	utils.LoadDotEnv(".env")
+
+	// 会话存储:-sessions 是纯存储操作,置于凭据校验之前(无凭据也可列出)。
+	store := session.NewFileStore(".agent/sessions")
+	if *sessList {
+		names, err := store.Names(context.Background())
+		if err != nil {
+			return err
+		}
+		for _, n := range names {
+			fmt.Println(n)
+		}
+		return nil
+	}
 
 	prefix := ""
 	if p := strings.TrimSpace(*provider); p != "" {
@@ -313,6 +332,25 @@ func run() error {
 
 	ui.Agent = ag                       // 两阶段装配:Responder(即 UI)先于 Agent 可用
 	ag.OnTextDelta = ui.TextDeltaSink() // 流式增量 → 终端
+
+	// 会话持久化:-session 指定时,启动续接(不存在则新建),每轮 Run 后自动保存。
+	if *sessName != "" {
+		msgs, err := store.Load(ctx, *sessName)
+		switch {
+		case err == nil:
+			ag.Messages = msgs
+			fmt.Fprintf(os.Stderr, "session: resumed %s (%d messages)\n", *sessName, len(msgs))
+		case errors.Is(err, agent.ErrSessionNotFound):
+			fmt.Fprintf(os.Stderr, "session: new %s\n", *sessName)
+		default:
+			return err
+		}
+		ui.AfterRun = func(runErr error) {
+			if err := store.Save(ctx, *sessName, ag.Messages); err != nil {
+				fmt.Fprintf(os.Stderr, "session: save: %v\n", err)
+			}
+		}
+	}
 
 	if *quick != "" {
 		return ui.RunOnce(ctx, *quick)

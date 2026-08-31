@@ -1,6 +1,13 @@
 package agent
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+// ErrSessionNotFound 表示指定会话不存在。
+// Store 实现应包装(%w)返回,调用方以 errors.Is 判定。
+var ErrSessionNotFound = errors.New("agent: session not found")
 
 // ToolSpec 是传给 LLM port 的工具投影:name/description/schema 三要素。
 // 可执行函数(Provider 的实现细节)永远不过 port 边界 —— 分层纪律。
@@ -40,4 +47,13 @@ type TextDelta struct {
 // 非流式完全一致。Agent 在存在增量消费者且适配器支持时优先走流式。
 type StreamingLLM interface {
 	TurnStream(ctx context.Context, r TurnRequest, emit func(TextDelta)) (TurnResult, error)
+}
+
+// SessionStore 是会话持久化的 port:按名字存取完整对话历史。
+// 实现方负责名字校验与存储格式;"不存在"语义统一包装 ErrSessionNotFound 返回。
+type SessionStore interface {
+	Save(ctx context.Context, name string, msgs []Message) error
+	Load(ctx context.Context, name string) ([]Message, error)
+	Names(ctx context.Context) ([]string, error)
+	Delete(ctx context.Context, name string) error
 }

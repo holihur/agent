@@ -18,6 +18,15 @@ agent -mcp "remote=https://mcp.example.com/mcp"
 
 完整示例(stdio 与 Streamable HTTP 两种传输)见 [examples](examples/README.md)。
 
+## 会话持久化
+
+对话历史按会话名存为 cwd 下 `.agent/sessions/<name>.jsonl`(JSONL,一行一条消息):
+
+```bash
+agent -sessions        # 列出已保存会话
+agent -session work    # 续接会话 work(不存在则新建),每轮自动保存;REPL 与 -q 均可
+```
+
 ## 嵌入式(Library)
 
 外部 Go 程序可在进程内直接驱动 agent(零 CLI、零 flag,配置全可选):

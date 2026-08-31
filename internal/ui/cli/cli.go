@@ -29,6 +29,10 @@ import (
 type UI struct {
 	Agent *agent.Agent
 
+	// AfterRun 非 nil 时,每次 runOnce 结束(无论成败)以该次运行错误回调
+	// (如会话自动保存);成功时实参为 nil。
+	AfterRun func(runErr error)
+
 	in       io.Reader
 	out      io.Writer
 	rl       *readline.Instance // TTY 会话;nil = 逐行兜底
@@ -143,6 +147,9 @@ func (u *UI) runOnce(ctx context.Context, line string) (string, error) {
 	}
 	u.streamed = false
 	answer, err := u.Agent.Run(ctx, line)
+	if u.AfterRun != nil {
+		u.AfterRun(err)
+	}
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return "", err
