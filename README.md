@@ -17,3 +17,14 @@ agent -mcp "remote=https://mcp.example.com/mcp"
 ```
 
 完整示例(stdio 与 Streamable HTTP 两种传输)见 [examples](examples/README.md)。
+
+## Skills
+
+启动时扫描 cwd 下的 `.agents/skills/`:每个 `<name>/SKILL.md` 即一个技能
+(YAML frontmatter 的 `name`/`description` 可选,`name` 缺省用目录名)。
+技能清单注入 system prompt;模型可调用 `skill` 工具按需加载单个技能的完整指令。
+
+```bash
+agent -skills .agents/skills  # 默认;可改为其他目录(相对 cwd 或绝对路径)
+agent -skills off             # 禁用
+```
