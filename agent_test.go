@@ -248,6 +248,55 @@ func TestSessionPersistenceRoundTrip(t *testing.T) {
 	}
 }
 
+func TestTemperatureConfig(t *testing.T) {
+	envCreds(t)
+	temp := 0.3
+	a, err := New(Config{Temperature: &temp})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer a.Close()
+	client := a.inner.LLM.(*llm.Client)
+	if client.Temperature == nil || *client.Temperature != 0.3 {
+		t.Fatalf("Temperature = %v, want 0.3", client.Temperature)
+	}
+
+	a2, err := New()
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer a2.Close()
+	if a2.inner.LLM.(*llm.Client).Temperature != nil {
+		t.Fatal("Temperature must default to nil (endpoint default)")
+	}
+	if _, err := New(Config{Temperature: floatPtr(1.5)}); err == nil {
+		t.Fatal("temperature > 1 must be rejected")
+	}
+}
+
+func floatPtr(v float64) *float64 { return &v }
+
+func TestReasoningEffortConfig(t *testing.T) {
+	envCreds(t)
+	a, err := New(Config{ReasoningEffort: "high"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer a.Close()
+	if got := a.inner.LLM.(*llm.Client).ReasoningEffort; got != "high" {
+		t.Fatalf("ReasoningEffort = %q, want high", got)
+	}
+
+	a2, err := New()
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer a2.Close()
+	if got := a2.inner.LLM.(*llm.Client).ReasoningEffort; got != "" {
+		t.Fatalf("ReasoningEffort = %q, want empty (endpoint default)", got)
+	}
+}
+
 type memStore struct{ data map[string][]core.Message }
 
 func (m *memStore) Save(_ context.Context, name string, msgs []core.Message) error {

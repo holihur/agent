@@ -49,14 +49,16 @@ type MCPSpec struct {
 
 // Config 是可选装配配置:全部字段零值安全(空值回落 env 或内置默认)。
 type Config struct {
-	APIKey    string       // 空 → env LLM_API_KEY / LLM_APIKEY
-	BaseURL   string       // 空 → env LLM_BASE_URL(Anthropic 兼容端点)
-	Model     string       // 空 → env LLM_MODEL
-	AuthStyle string       // 空 → env LLM_AUTH_STYLE;bearer(默认) | x-api-key | both
-	System    string       // 空 → 不注入 system prompt
-	MaxTokens int          // 0 → 1024
-	MaxTurns  int          // 0 → 默认 60
-	Sessions  SessionStore // nil → 默认文件存储(cwd 下 .agent/sessions)
+	APIKey          string       // 空 → env LLM_API_KEY / LLM_APIKEY
+	BaseURL         string       // 空 → env LLM_BASE_URL(Anthropic 兼容端点)
+	Model           string       // 空 → env LLM_MODEL
+	AuthStyle       string       // 空 → env LLM_AUTH_STYLE;bearer(默认) | x-api-key | both
+	System          string       // 空 → 不注入 system prompt
+	MaxTokens       int          // 0 → 1024
+	MaxTurns        int          // 0 → 默认 60
+	Temperature     *float64     // nil → 不发送(端点默认);指向 0 = 确定性;>1 报错
+	ReasoningEffort string       // 空 → 不发送;常见 low/medium/high,值原样透传
+	Sessions        SessionStore // nil → 默认文件存储(cwd 下 .agent/sessions)
 }
 
 // Agent 是嵌入式 agent 门面:New 构造,Tool/MCP/Shell 按需挂载,Run 驱动,
@@ -97,8 +99,13 @@ func New(cfg ...Config) (*Agent, error) {
 	if err := registry.Register(local); err != nil {
 		return nil, err
 	}
+	if c.Temperature != nil && *c.Temperature > 1 {
+		return nil, fmt.Errorf("agent: temperature must be in [0,1], got %v", *c.Temperature)
+	}
 	client := llm.New(apiKey, baseURL, model, c.MaxTokens)
 	client.AuthStyle = authStyle
+	client.Temperature = c.Temperature
+	client.ReasoningEffort = c.ReasoningEffort
 	sessions := c.Sessions
 	if sessions == nil {
 		sessions = session.NewFileStore(".agent/sessions")

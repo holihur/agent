@@ -28,6 +28,12 @@ type Client struct {
 	// AuthStyle 决定认证头:bearer(默认)| x-api-key | both。
 	// 各网关认证方式不同,无法从 URL 可靠推断,故显式配置。
 	AuthStyle string
+	// Temperature 采样温度:nil = 不发送该字段(端点默认);
+	// 指针值原样透传 —— 温度 0(确定性)是合法值,不能以零值表达"未设置"。
+	Temperature *float64
+	// ReasoningEffort 推理力度:空 = 不发送;值原样透传,常见 low/medium/high,
+	// 兼容网关自定义取值(与 AuthStyle 同为显式透传,不在客户端枚举校验)。
+	ReasoningEffort string
 }
 
 func New(apiKey, baseURL, model string, maxTokens int) *Client {
@@ -43,11 +49,13 @@ func (c *Client) Turn(ctx context.Context, r agent.TurnRequest) (agent.TurnResul
 		return agent.TurnResult{}, errors.New("llm: base URL is required")
 	}
 	body, err := json.Marshal(wireRequest{
-		Model:     c.Model,
-		MaxTokens: c.MaxTokens,
-		System:    r.System,
-		Messages:  domainToWireMessages(r.Messages),
-		Tools:     specsToWireTools(r.Tools),
+		Model:           c.Model,
+		MaxTokens:       c.MaxTokens,
+		System:          r.System,
+		Messages:        domainToWireMessages(r.Messages),
+		Tools:           specsToWireTools(r.Tools),
+		Temperature:     c.Temperature,
+		ReasoningEffort: c.ReasoningEffort,
 	})
 	if err != nil {
 		return agent.TurnResult{}, fmt.Errorf("llm: encode request: %w", err)

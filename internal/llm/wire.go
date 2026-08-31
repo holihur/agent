@@ -19,12 +19,14 @@ import (
 //   #4 tool 入参是 JSON 对象(非字符串),且必须是对象(空参发 {})
 
 type wireRequest struct {
-	Model     string        `json:"model"`
-	MaxTokens int           `json:"max_tokens"`
-	System    string        `json:"system,omitempty"`
-	Messages  []wireMessage `json:"messages"`
-	Tools     []wireTool    `json:"tools,omitempty"`
-	Stream    bool          `json:"stream,omitempty"` // true = SSE 流式响应
+	Model           string        `json:"model"`
+	MaxTokens       int           `json:"max_tokens"`
+	System          string        `json:"system,omitempty"`
+	Messages        []wireMessage `json:"messages"`
+	Tools           []wireTool    `json:"tools,omitempty"`
+	Stream          bool          `json:"stream,omitempty"`           // true = SSE 流式响应
+	Temperature     *float64      `json:"temperature,omitempty"`      // nil = 交给端点默认
+	ReasoningEffort string        `json:"reasoning_effort,omitempty"` // 空 = 交给端点默认
 }
 
 type wireMessage struct {

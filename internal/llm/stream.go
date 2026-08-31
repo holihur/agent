@@ -34,12 +34,14 @@ type wireStreamEvent struct {
 // thinking 与 tool_use 的 JSON 增量静默组装,不进入 emit。
 func (c *Client) TurnStream(ctx context.Context, r agent.TurnRequest, emit func(agent.TextDelta)) (agent.TurnResult, error) {
 	body, err := json.Marshal(wireRequest{
-		Model:     c.Model,
-		MaxTokens: c.MaxTokens,
-		System:    r.System,
-		Messages:  domainToWireMessages(r.Messages),
-		Tools:     specsToWireTools(r.Tools),
-		Stream:    true,
+		Model:           c.Model,
+		MaxTokens:       c.MaxTokens,
+		System:          r.System,
+		Messages:        domainToWireMessages(r.Messages),
+		Tools:           specsToWireTools(r.Tools),
+		Stream:          true,
+		Temperature:     c.Temperature,
+		ReasoningEffort: c.ReasoningEffort,
 	})
 	if err != nil {
 		return agent.TurnResult{}, fmt.Errorf("llm: encode request: %w", err)
