@@ -29,19 +29,19 @@ func TestApplyMultipliers(t *testing.T) {
 	// Default palette against the default HSV {0.8, 0.5, 0.5}.
 	cfg := DefaultConfig()
 	got := applyMultipliers(cfg.Dark, cfg.HSV[0], cfg.HSV[1], cfg.HSV[2])
-	if got != "7;17;31m" {
-		t.Errorf("Dark = %q, want 7;17;31m", got)
+	if got != "27;7;31m" {
+		t.Errorf("Dark = %q, want 27;7;31m", got)
 	}
-	if applyMultipliers(cfg.Mid, cfg.HSV[0], cfg.HSV[1], cfg.HSV[2]) != "31;44;63m" {
+	if applyMultipliers(cfg.Mid, cfg.HSV[0], cfg.HSV[1], cfg.HSV[2]) != "57;31;63m" {
 		t.Errorf("Mid wrong")
 	}
-	if applyMultipliers(cfg.Symbol, cfg.HSV[0], cfg.HSV[1], cfg.HSV[2]) != "95;133;191m" {
+	if applyMultipliers(cfg.Symbol, cfg.HSV[0], cfg.HSV[1], cfg.HSV[2]) != "172;95;191m" {
 		t.Errorf("Symbol wrong")
 	}
 }
 
 func TestANSI2Hex(t *testing.T) {
-	if got := ansi2hex("7;17;31m"); got != "#07111f" {
+	if got := ansi2hex("27;7;31m"); got != "#1b071f" {
 		t.Errorf("ansi2hex = %q", got)
 	}
 }
