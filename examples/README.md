@@ -60,6 +60,16 @@ go run ./cmd/agent -mcp "echo=http://127.0.0.1:8787/mcp" -q "用 now 工具告�
 }
 ```
 
+## 方式四:嵌入式(Library)`examples/embedded`
+
+不经 CLI,宿主 Go 程序在进程内装配并驱动 agent(配置全可选,凭据走 env):
+
+```bash
+LLM_API_KEY=... LLM_BASE_URL=... LLM_MODEL=... go run ./examples/embedded
+```
+
+公开 API 见模块根的 `agent` 包文档(`New` / `Tool` / `MCP` / `Shell` / `OnTextDelta` / `Run` / `Close`)。
+
 ## 说明
 
 - 两个示例都只实现 agent 客户端走过的现代路径(`server/discover` → `tools/list` → `tools/call`),不是通用 MCP 服务器,legacy(2025-06-18)握手未实现。

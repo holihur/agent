@@ -18,6 +18,31 @@ agent -mcp "remote=https://mcp.example.com/mcp"
 
 完整示例(stdio 与 Streamable HTTP 两种传输)见 [examples](examples/README.md)。
 
+## 嵌入式(Library)
+
+外部 Go 程序可在进程内直接驱动 agent(零 CLI、零 flag,配置全可选):
+
+```go
+import agent "github.com/holihur/agent"
+
+ag, err := agent.New() // 凭据缺省走 env:LLM_API_KEY / LLM_BASE_URL / LLM_MODEL
+if err != nil { log.Fatal(err) }
+defer ag.Close()
+
+_ = ag.Tool("now", "Returns the current time in RFC3339.",
+    map[string]any{"type": "object"},
+    func(_ context.Context, _ json.RawMessage) (string, error) {
+        return time.Now().Format(time.RFC3339), nil
+    })
+_ = ag.MCP(agent.MCPSpec{Name: "echo", Command: []string{"/tmp/echo-mcp"}})
+_ = ag.Shell() // 内置 shell 工具默认关闭,按需开启
+
+ag.OnTextDelta(func(d agent.TextDelta) { fmt.Print(d.Text) })
+answer, err := ag.Run(context.Background(), "现在几点了?用 now 工具回答")
+```
+
+完整示例见 [examples/embedded](examples/README.md)。
+
 ## Skills
 
 启动时扫描 cwd 下的 `.agents/skills/`:每个 `<name>/SKILL.md` 即一个技能
