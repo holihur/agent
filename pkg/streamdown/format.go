@@ -269,7 +269,11 @@ func (r *Renderer) formatTable(rowList []string) []string {
 	for ix := 0; ix < rowHeight; ix++ {
 		extra := ""
 		if s.inTable != tableHead && ix == rowHeight-1 {
-			extra = "\x1b[4;58;2;" + style.Mid // underline-colour bottom border
+			if style.PlainBackground {
+				extra = "\x1b[4m" // plain: 无彩色下划线边框(避免暗紫红色带)
+			} else {
+				extra = "\x1b[4;58;2;" + style.Mid // underline-colour bottom border
+			}
 		}
 		segments := make([]string, numCols)
 		for iy := 0; iy < numCols; iy++ {
@@ -294,7 +298,7 @@ func (r *Renderer) formatTable(rowList []string) []string {
 		out = append(out, s.spaceLeft(false)+ANSIFGReset+strings.Join(segments, sep)+ANSIReset)
 	}
 
-	s.bg = ANSIBGReset
+	s.bg = bgReset(s)
 	return out
 }
 

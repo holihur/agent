@@ -173,7 +173,7 @@ func (r *Renderer) parse(input io.Reader, emit func(string)) {
 				s.codeIndent = 0
 				codeType := s.inCode
 				s.inCode = CodeNone
-				s.bg = ANSIBGReset
+				s.bg = bgReset(s)
 				if !r.Style.PlainBackground {
 					if r.Style.PrettyPad || r.Style.PrettyBroken {
 						emit(r.Style.Codepad[1])

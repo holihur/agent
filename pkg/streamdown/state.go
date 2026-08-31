@@ -90,11 +90,23 @@ type ParseState struct {
 }
 
 func newParseState(st *Style) *ParseState {
+	bg := ANSIBGReset
+	if st.PlainBackground {
+		bg = "" // plain 模式不设背景,避免行尾/表格填充里出现 49m 复位噪音
+	}
 	return &ParseState{
 		Style:         st,
-		bg:            ANSIBGReset,
+		bg:            bg,
 		lastLineEmpty: true,
 	}
+}
+
+// bgReset 返回当前模式的背景复位码:plain 模式无背景,直接返回空串。
+func bgReset(s *ParseState) string {
+	if s.Style.PlainBackground {
+		return ""
+	}
+	return ANSIBGReset
 }
 
 // currentNone reports whether no inline/block formatting is active (used for
