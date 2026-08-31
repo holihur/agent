@@ -11,7 +11,8 @@ package mcp
 import "context"
 
 // Transport 抽象一帧传输(MCP 消息 = 一行 JSON)。协议与载体解耦:
-// stdio 是子进程管道;将来 Streamable HTTP 只需新增实现(设计 v4 §四)。
+// stdio 是子进程管道(internal/mcp/stdio.go);
+// Streamable HTTP 是 POST + 单帧/SSE 响应(internal/mcp/http.go)。
 type Transport interface {
 	// Send 写一帧(实现方保证并发安全)。
 	Send(b []byte) error

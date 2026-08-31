@@ -12,15 +12,24 @@
 //	agent -mcp "fs=npx @modelcontextprotocol/server-filesystem /tmp"
 //	agent -q "3+5 等于几" -mcp "gh=gh-mcp-server"  # 一次性执行
 //	agent -agents-md off                         # 禁用 AGENTS.md 注入(auto 默认从 cwd 逐层向上发现)
+//
+// MCP 服务器来源(可叠加,规范 docs/mcp.json.spec.md):
+//   - 文件:cwd 下 mcp.json(或 .mcp.json)的 mcpServers 对象(command=stdio / url=http)
+//   - 标志:-mcp <name>=<command> [args...](可重复;同名覆盖文件条目)
+//   - 标志远程:-mcp <name>=https://host/mcp(Streamable HTTP)
 package main
 
 import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
+	"maps"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/holihur/agent/internal/agent"
@@ -50,6 +59,7 @@ type mcpServer struct {
 	Name    string
 	Command string
 	Args    []string
+	URL     string // 以 http(s):// 开头时为远程服务器(与 Command 互斥)
 }
 
 func (f *mcpFlags) String() string {
@@ -66,14 +76,100 @@ func (f *mcpFlags) String() string {
 func (f *mcpFlags) Set(v string) error {
 	name, rest, ok := strings.Cut(v, "=")
 	if !ok || name == "" || !serverNameRe.MatchString(name) {
-		return fmt.Errorf("-mcp must be <name>=<command> [args...], got %q", v)
+		return fmt.Errorf("-mcp must be <name>=<command> [args...] or <name>=<http(s)://url>, got %q", v)
 	}
 	fields := strings.Fields(rest)
 	if len(fields) == 0 {
 		return fmt.Errorf("-mcp %s: missing command", name)
 	}
+	if isHTTPURL(fields[0]) {
+		if len(fields) > 1 {
+			return fmt.Errorf("-mcp %s: remote url takes no args", name)
+		}
+		*f = append(*f, mcpServer{Name: name, URL: fields[0]})
+		return nil
+	}
 	*f = append(*f, mcpServer{Name: name, Command: fields[0], Args: fields[1:]})
 	return nil
+}
+
+// isHTTPURL 判断 flag 值是否指向远程服务器(规范 §mcp.json/remote)。
+func isHTTPURL(s string) bool {
+	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
+}
+
+// serverSpec 是装配一个 MCP Provider 所需的最终配置。
+// URL 非空 → Streamable HTTP;否则 Command + Args → stdio 子进程。
+type serverSpec struct {
+	Name    string
+	Command string
+	Args    []string
+	Env     []string
+	URL     string
+	Headers map[string]string
+}
+
+// mergeMCPServers 合并 mcp.json 条目与 -mcp flag(规范 §mcp.json/merge):
+// 文件条目按文档顺序在前,flag 按顺序追加;同名时 flag 覆盖文件条目。
+// env 转为键名排序的 "K=V" 切片,追加到子进程继承环境之后。
+func mergeMCPServers(fromFile []mcp.JSONServer, fromFlags mcpFlags) []serverSpec {
+	specs := make([]serverSpec, 0, len(fromFile)+len(fromFlags))
+	index := make(map[string]int, len(fromFile)+len(fromFlags))
+	add := func(s serverSpec) {
+		if i, ok := index[s.Name]; ok {
+			specs[i] = s
+			return
+		}
+		index[s.Name] = len(specs)
+		specs = append(specs, s)
+	}
+	for _, s := range fromFile {
+		add(serverSpec{
+			Name: s.Name, Command: s.Command, Args: s.Args,
+			Env: envPairs(s.Env), URL: s.URL, Headers: s.Headers,
+		})
+	}
+	for _, s := range fromFlags {
+		add(serverSpec{Name: s.Name, Command: s.Command, Args: s.Args, URL: s.URL})
+	}
+	return specs
+}
+
+// envPairs 把 env 映射转为键名排序的 "K=V" 切片(排序保证确定性)。
+func envPairs(env map[string]string) []string {
+	if len(env) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(env))
+	for _, k := range slices.Sorted(maps.Keys(env)) {
+		out = append(out, k+"="+env[k])
+	}
+	return out
+}
+
+// buildMCPProviders 按 spec 装配 Provider 并做启动预检(ListTools 即建连 + 探测 + 缓存)。
+// 失败分流(规范 §mcp.json/remote):远程服务器不可达/协议不符 → 向 warnW 警告并跳过,
+// 进程继续;stdio 失败(命令不存在等配置错误)→ 返回 error,fail-fast。
+func buildMCPProviders(ctx context.Context, specs []serverSpec, warnW io.Writer, responder tools.Responder) ([]*mcp.Provider, error) {
+	var providers []*mcp.Provider
+	for _, s := range specs {
+		var p *mcp.Provider
+		if s.URL != "" {
+			p = mcp.NewHTTP(s.Name, mcp.HTTPConfig{URL: s.URL, Headers: s.Headers}, responder)
+		} else {
+			p = mcp.NewStdio(s.Name, mcp.StdioConfig{Command: s.Command, Args: s.Args, Env: s.Env}, responder)
+		}
+		if _, err := p.ListTools(ctx); err != nil {
+			_ = p.Close()
+			if s.URL != "" {
+				fmt.Fprintf(warnW, "mcp: skipping remote server %q: %v\n", s.Name, err)
+				continue
+			}
+			return nil, err
+		}
+		providers = append(providers, p)
+	}
+	return providers, nil
 }
 
 func main() {
@@ -133,6 +229,11 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+
 	registry := tools.New()
 	builtin, err := tools.NewBuiltin()
 	if err != nil {
@@ -147,30 +248,37 @@ func run() error {
 	// 生命周期钩子:每个 hook 是 internal/hook/ 下一个子包,init 自注册,
 	// 上方 blank-import 激活;这里只统一装配 InstallAll。
 	hooks := agent.NewHooks()
-	cwd, err := os.Getwd()
-	if err != nil {
-		return err
-	}
 	if err := hook.InstallAll(hooks, hook.Deps{CWD: cwd, UI: ui}); err != nil {
 		return err
 	}
 
-	// MCP 服务器:每个是一个 Provider;REPL UI 同时充当 MRTR 应答者。
-	var mcpProviders []*mcp.Provider
-	for _, s := range servers {
-		p := mcp.NewStdio(s.Name, mcp.StdioConfig{Command: s.Command, Args: s.Args}, ui)
-		mcpProviders = append(mcpProviders, p)
-		if err := registry.Register(p); err != nil {
-			return err
-		}
+	// MCP 服务器:mcp.json 文件条目与 -mcp flag 合并(规范 §mcp.json/merge),
+	// 每个是一个 Provider;REPL UI 同时充当 MRTR 应答者。
+	fromFile, err := mcp.LoadJSONConfig(
+		filepath.Join(cwd, "mcp.json"),
+		filepath.Join(cwd, ".mcp.json"),
+	)
+	if err != nil {
+		return err
+	}
+	// MCP 服务器:mcp.json 文件条目与 -mcp flag 合并(规范 §mcp.json/merge)。
+	// 启动预检分流(规范 §mcp.json/remote):远程失败 → 警告并跳过;stdio 失败 → fail-fast。
+	mcpProviders, err := buildMCPProviders(ctx, mergeMCPServers(fromFile, servers), os.Stderr, ui)
+	if err != nil {
+		return err
 	}
 	defer func() {
 		for _, p := range mcpProviders {
 			_ = p.Close()
 		}
 	}()
+	for _, p := range mcpProviders {
+		if err := registry.Register(p); err != nil {
+			return err
+		}
+	}
 
-	// 预检:聚合工具列表(连接各服务器 / 暴露名冲突,全部 fail-fast)。
+	// 预检:聚合工具列表(暴露名冲突 fail-fast;连接已由 buildMCPProviders 分流处理)。
 	defs, err := registry.Tools(ctx)
 	if err != nil {
 		return err

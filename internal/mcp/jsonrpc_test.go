@@ -229,9 +229,19 @@ func TestServerRequestAnsweredWithMethodNotFound(t *testing.T) {
 		_, err := c.call(context.Background(), "ping-ish", nil)
 		resCh <- err
 	}()
+	// 拒绝帧与正常请求帧的顺序是并发的,不可假设(同 TestCallRoundTripAndCorrelation):
+	// 按 method 找到正常请求的 id。
 	for len(tr.sentFrames()) < 2 {
 	}
-	normalID := *decodeFrame(t, tr.sentFrames()[1]).ID
+	var normalID int64
+	for _, f := range tr.sentFrames() {
+		if req := decodeFrame(t, f); req.Method == "ping-ish" {
+			normalID = *req.ID
+		}
+	}
+	if normalID == 0 {
+		t.Fatal("ping-ish request not sent")
+	}
 	pushResponse(tr, normalID, map[string]any{})
 	if err := <-resCh; err != nil {
 		t.Fatalf("normal call failed: %v", err)

@@ -62,6 +62,16 @@ func NewStdio(name string, cfg StdioConfig, responder tools.Responder) *Provider
 	}
 }
 
+// NewHTTP 创建基于 Streamable HTTP 传输的 MCP Provider(规范 §mcp.json/remote)。
+// 与 stdio 共用同一套时代探测与按需重生:dial 是幂等的建连,连接无子进程生命周期。
+func NewHTTP(name string, cfg HTTPConfig, responder tools.Responder) *Provider {
+	return &Provider{
+		name:      name,
+		dial:      func(_ context.Context) (Transport, error) { return dialHTTP(context.Background(), cfg) },
+		responder: responder,
+	}
+}
+
 // Namespace 实现 tools.Provider。
 func (p *Provider) Namespace() string { return p.name }
 
