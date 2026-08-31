@@ -1,4 +1,6 @@
-package hook
+// Package shell 实现 REPL "!" shell 逃逸:以 "!" 开头的输入直接交给 sh 执行,
+// 不进对话历史、不调模型。
+package shell
 
 import (
 	"context"
@@ -9,15 +11,16 @@ import (
 	"time"
 
 	"github.com/holihur/agent/internal/agent"
+	"github.com/holihur/agent/internal/hook"
 )
 
 func init() {
-	Register("shell", installShell)
+	hook.Register("shell", installShell)
 }
 
 // installShell 接上 REPL 的 "!" shell 逃逸:以 "!" 开头的输入直接交给
 // sh -c 执行,合并输出作为本轮回答返回,不进对话历史。始终开启。
-func installShell(h *agent.Hooks, _ Deps) error {
+func installShell(h *agent.Hooks, _ hook.Deps) error {
 	h.OnInterceptUserInput(runShell)
 	return nil
 }

@@ -1,8 +1,5 @@
-// Package hook 提供 Agent 生命周期钩子的功能安装器。
-//
-// 契约(Hooks 类型)在 internal/agent/hooks.go;本包内每个功能一个文件,
-// 自声明 CLI flag 并在 init 中 Register,装配层(main)只调一次 InstallAll
-// —— 新增钩子功能 = 在本包新增一个文件,main.go 零改动。
+// Package hook 是钩子装配的中枢:登记(Register)与统一安装(InstallAll)。
+// 契约(Hooks 类型)在 internal/agent/hooks.go;hook 功能见各子包。
 package hook
 
 import (

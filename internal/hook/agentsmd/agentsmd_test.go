@@ -1,4 +1,4 @@
-package hook
+package agentsmd
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/holihur/agent/internal/agent"
+	"github.com/holihur/agent/internal/hook"
 	"github.com/holihur/agent/internal/tools"
 )
 
@@ -138,7 +139,7 @@ func TestInstallAgentsMDInjectsSystem(t *testing.T) {
 	setAgentsMDFlag(t, p)
 
 	h := agent.NewHooks()
-	if err := installAgentsMD(h, Deps{CWD: t.TempDir()}); err != nil {
+	if err := installAgentsMD(h, hook.Deps{CWD: t.TempDir()}); err != nil {
 		t.Fatal(err)
 	}
 	cap := &captureLLM{}
@@ -157,7 +158,7 @@ func TestInstallAgentsMDInjectsSystem(t *testing.T) {
 func TestInstallAgentsMDDisabled(t *testing.T) {
 	setAgentsMDFlag(t, "off")
 	h := agent.NewHooks()
-	if err := installAgentsMD(h, Deps{CWD: t.TempDir()}); err != nil {
+	if err := installAgentsMD(h, hook.Deps{CWD: t.TempDir()}); err != nil {
 		t.Fatal(err)
 	}
 	cap := &captureLLM{}
@@ -172,7 +173,7 @@ func TestInstallAgentsMDDisabled(t *testing.T) {
 
 func TestInstallAgentsMDFailFast(t *testing.T) {
 	setAgentsMDFlag(t, filepath.Join(t.TempDir(), "nope", agentsMDFile))
-	if err := installAgentsMD(agent.NewHooks(), Deps{CWD: t.TempDir()}); err == nil {
+	if err := installAgentsMD(agent.NewHooks(), hook.Deps{CWD: t.TempDir()}); err == nil {
 		t.Fatal("explicit missing path should fail fast")
 	}
 }

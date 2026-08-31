@@ -1,4 +1,5 @@
-package hook
+// Package agentsmd 实现启动时逐层向上发现并注入 AGENTS.md 项目指令的 hook。
+package agentsmd
 
 import (
 	"flag"
@@ -9,17 +10,18 @@ import (
 	"strings"
 
 	"github.com/holihur/agent/internal/agent"
+	"github.com/holihur/agent/internal/hook"
 )
 
 var agentsMD = flag.String("agents-md", "auto", "AGENTS.md source: auto (discover from cwd up), off, or a file path (hook)")
 
 func init() {
-	Register("agents-md", installAgentsMD)
+	hook.Register("agents-md", installAgentsMD)
 }
 
 // installAgentsMD 启动时读取一次 AGENTS.md,之后每轮 Turn 都并入 system
 // prompt(会话内保持一致,不随磁盘变化);实际加载到的路径打到 stderr。
-func installAgentsMD(h *agent.Hooks, d Deps) error {
+func installAgentsMD(h *agent.Hooks, d hook.Deps) error {
 	content, loaded, err := loadAgentsMD(agentsMDSources(*agentsMD, d.CWD))
 	if err != nil || content == "" {
 		return err

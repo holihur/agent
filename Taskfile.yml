@@ -1,0 +1,29 @@
+version: '3'
+
+tasks:
+  dev:
+    desc: Build and run the agent
+    cmds:
+      - go build -o /tmp/agent ./cmd/agent && /tmp/agent {{.CLI_ARGS}}
+    env:
+      LONGCAT_APIKEY: "{{.LONGCAT_APIKEY}}"
+      LONGCAT_BASE_URL: "{{.LONGCAT_BASE_URL}}"
+      LONGCAT_MODEL: "{{.LONGCAT_MODEL}}"
+    dotenv: ['.env']
+    silent: false
+
+  build:
+    desc: Build the binary
+    cmds:
+      - go build -o /tmp/agent ./cmd/agent
+
+  test:
+    desc: Run all tests
+    cmds:
+      - go test ./...
+
+  run:
+    desc: Run the built binary (requires `task build` first)
+    cmds:
+      - /tmp/agent {{.CLI_ARGS}}
+    dotenv: ['.env']

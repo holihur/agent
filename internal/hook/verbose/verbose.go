@@ -1,4 +1,5 @@
-package hook
+// Package verbose 实现打到 stderr 的 LLM 轮次与工具调用观测日志 hook。
+package verbose
 
 import (
 	"flag"
@@ -7,16 +8,17 @@ import (
 	"time"
 
 	"github.com/holihur/agent/internal/agent"
+	"github.com/holihur/agent/internal/hook"
 )
 
 var verbose = flag.Bool("verbose", false, "print LLM turns and tool outcomes to stderr (hook)")
 
 func init() {
-	Register("verbose", installVerbose)
+	hook.Register("verbose", installVerbose)
 }
 
 // installVerbose 把 LLM 轮次与工具调用的观测日志挂到 stderr。
-func installVerbose(h *agent.Hooks, _ Deps) error {
+func installVerbose(h *agent.Hooks, _ hook.Deps) error {
 	if !*verbose {
 		return nil
 	}

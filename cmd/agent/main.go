@@ -30,6 +30,12 @@ import (
 	"github.com/holihur/agent/internal/tools"
 	uicli "github.com/holihur/agent/internal/ui/cli"
 	"github.com/holihur/agent/internal/utils"
+
+	// 钩子功能包:各自在 init 中向 hook 注册(新增功能 = 新增子目录 + 此处一行)。
+	_ "github.com/holihur/agent/internal/hook/agentsmd"
+	_ "github.com/holihur/agent/internal/hook/confirm"
+	_ "github.com/holihur/agent/internal/hook/shell"
+	_ "github.com/holihur/agent/internal/hook/verbose"
 )
 
 // serverNameRe 与 tools 层命名空间校验保持一致(提前拦截,报错更友好)。
@@ -138,8 +144,8 @@ func run() error {
 
 	ui := uicli.New(os.Stdin, os.Stdout)
 
-	// 生命周期钩子:全部在 internal/hook 各文件内自注册,这里只统一装配
-	// (新增钩子功能 = internal/hook 新增一个文件,本文件零改动)。
+	// 生命周期钩子:每个 hook 是 internal/hook/ 下一个子包,init 自注册,
+	// 上方 blank-import 激活;这里只统一装配 InstallAll。
 	hooks := agent.NewHooks()
 	cwd, err := os.Getwd()
 	if err != nil {
