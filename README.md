@@ -1,5 +1,8 @@
 # agent
 
+[![CI](https://github.com/holihur/agent/actions/workflows/ci.yml/badge.svg)](https://github.com/holihur/agent/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/holihur/agent/graph/badge.svg)](https://codecov.io/gh/holihur/agent)
+
 ## 安装
 
 ```bash
