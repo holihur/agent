@@ -101,9 +101,54 @@ func TestCodeBlock(t *testing.T) {
 	if strings.Contains(out, "```") {
 		t.Errorf("fence leaked: %q", out)
 	}
-	// Code blocks are padded with the ▄/▀ half-block pads when PrettyPad is on.
+	// 默认 PlainBackground:代码块不画背景/边衬。
+	if strings.Contains(out, "▄") || strings.Contains(out, "▀") {
+		t.Errorf("default render must not emit code pads: %q", out)
+	}
+}
+
+// TestCodeBlockReferenceLook 验证 PlainBackground=false 还原参考实现的
+// 深色背景 + ▄/▀ 边衬样式。
+func TestCodeBlockReferenceLook(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Width = 80
+	cfg.Plaintext = true
+	falseVal := false
+	cfg.PlainBackground = &falseVal
+	var buf strings.Builder
+	r, err := New(&buf, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.RenderString("```go\nfunc main() {}\n```\n"); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
 	if !strings.Contains(out, "▄") || !strings.Contains(out, "▀") {
-		t.Errorf("code pads missing: %q", out)
+		t.Errorf("reference look must emit code pads: %q", out)
+	}
+}
+
+// TestDefaultHasNoTintedBackground 默认渲染(PlainBackground)不得出现任何
+// 背景色码:代码块/表格/行内代码全部用终端默认背景。
+func TestDefaultHasNoTintedBackground(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Width = 80
+	var buf strings.Builder
+	r, err := New(&buf, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := strings.Join([]string{
+		"`inline` code\n",
+		"| A | B |\n|---|---|\n| 1 | 2 |\n",
+		"```go\nfunc main() {}\n```\n",
+	}, "\n")
+	if err := r.RenderString(src); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(buf.String(), "\x1b[48;2;") {
+		t.Errorf("default render must not paint backgrounds: %q", buf.String())
 	}
 }
 

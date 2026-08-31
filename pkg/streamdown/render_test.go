@@ -9,12 +9,11 @@ import (
 )
 
 // renderFixture renders a testdata file with the given width and plaintext
-// mode and returns the raw bytes written to the output writer.
-func renderFixture(t *testing.T, name string, width int, plaintext bool) []byte {
+// mode and returns the raw bytes written to the output writer. images=false
+// keeps ![alt](url) raw (the reference corpus comparison also disables image
+// handling, since terminal image rendering is not portable).
+func renderFixture(t *testing.T, name string, cfg Config) []byte {
 	t.Helper()
-	cfg := DefaultConfig()
-	cfg.Width = width
-	cfg.Plaintext = plaintext
 	var buf bytes.Buffer
 	r, err := New(&buf, cfg)
 	if err != nil {
@@ -46,7 +45,13 @@ func TestGoldenANSI(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.fixture, func(t *testing.T) {
-			got := renderFixture(t, tc.fixture, tc.width, false)
+			// ANSI goldens are generated from the reference with tinted
+			// backgrounds, so keep PlainBackground off for this comparison.
+			cfg := DefaultConfig()
+			cfg.Width = tc.width
+			falseVal := false
+			cfg.PlainBackground = &falseVal
+			got := renderFixture(t, tc.fixture, cfg)
 			want, err := os.ReadFile(filepath.Join("testdata", tc.golden))
 			if err != nil {
 				t.Fatalf("read golden: %v", err)
@@ -65,14 +70,25 @@ func TestGoldenPlaintext(t *testing.T) {
 		fixture string
 		golden  string
 		width   int
+		images  bool
 	}{
-		{"basic.md", "basic.plain.golden", 80},
-		{"cjk.md", "cjk.plain.golden", 60},
-		{"full.md", "full.plain.golden", 80},
+		{"basic.md", "basic.plain.golden", 80, true},
+		{"cjk.md", "cjk.plain.golden", 60, true},
+		{"full.md", "full.plain.golden", 80, true},
+		{"markdown-demo.md", "markdown-demo.plain.golden", 100, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.fixture, func(t *testing.T) {
-			got := renderFixture(t, tc.fixture, tc.width, true)
+			cfg := DefaultConfig()
+			cfg.Width = tc.width
+			cfg.Plaintext = true
+			// Python goldens keep the tinted pads, so use the reference look.
+			falseVal := false
+			cfg.PlainBackground = &falseVal
+			if !tc.images {
+				cfg.Images = &falseVal
+			}
+			got := renderFixture(t, tc.fixture, cfg)
 			want, err := os.ReadFile(filepath.Join("testdata", tc.golden))
 			if err != nil {
 				t.Fatalf("read golden: %v", err)

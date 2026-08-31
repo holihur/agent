@@ -112,9 +112,13 @@ func (r *Renderer) lineFormat(line string) string {
 				s.codeBufferRaw = ""
 			}
 			if s.inlineCode != "" {
-				out.WriteString(ANSIBG + style.Mid)
+				if !style.PlainBackground {
+					out.WriteString(ANSIBG + style.Mid)
+				}
 			} else {
-				out.WriteString(s.bg)
+				if !style.PlainBackground {
+					out.WriteString(s.bg)
+				}
 				s.codeBufferRaw = ""
 			}
 
@@ -244,7 +248,9 @@ func (r *Renderer) formatTable(rowList []string) []string {
 	if s.inTable != tableHead {
 		bgColor = style.Dark
 	}
-	s.bg = ANSIBG + bgColor
+	if !style.PlainBackground {
+		s.bg = ANSIBG + bgColor
+	}
 
 	// First pass: wrap every cell and find the tallest one.
 	wrapped := make([][]string, numCols)
@@ -273,9 +279,18 @@ func (r *Renderer) formatTable(rowList []string) []string {
 				segment = cell[ix]
 			}
 			pad := colWidth[iy] - visibleLength(segment)
-			segments[iy] = ANSIBG + bgColor + extra + " " + segment + strings.Repeat(" ", max(0, pad))
+			if style.PlainBackground {
+				segments[iy] = extra + " " + segment + strings.Repeat(" ", max(0, pad))
+			} else {
+				segments[iy] = ANSIBG + bgColor + extra + " " + segment + strings.Repeat(" ", max(0, pad))
+			}
 		}
-		sep := ANSIBG + bgColor + extra + ANSIFG + style.Symbol + "│" + ANSIReset
+		var sep string
+		if style.PlainBackground {
+			sep = extra + ANSIFG + style.Symbol + "│" + ANSIReset
+		} else {
+			sep = ANSIBG + bgColor + extra + ANSIFG + style.Symbol + "│" + ANSIReset
+		}
 		out = append(out, s.spaceLeft(false)+ANSIFGReset+strings.Join(segments, sep)+ANSIReset)
 	}
 

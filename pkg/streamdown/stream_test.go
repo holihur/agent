@@ -33,7 +33,10 @@ func (r *trickleReader) Read(p []byte) (int, error) {
 // a single-shot render.
 func TestStreamingChunkEquivalence(t *testing.T) {
 	src := []byte(readFixture(t, "cjk.md"))
-	want := renderFixture(t, "cjk.md", 60, true)
+	cfg := DefaultConfig()
+	cfg.Width = 60
+	cfg.Plaintext = true
+	want := renderFixture(t, "cjk.md", cfg)
 	for _, size := range []int{1, 2, 7, 16, 64} {
 		t.Run("chunk"+strconv.Itoa(size), func(t *testing.T) {
 			cfg := DefaultConfig()

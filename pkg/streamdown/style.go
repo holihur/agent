@@ -53,9 +53,10 @@ type Style struct {
 	Syntax       string
 	Plaintext    bool
 
-	CodeSpaces bool
-	Images     bool
-	Links      bool
+	CodeSpaces      bool
+	Images          bool
+	Links           bool
+	PlainBackground bool // 代码块/表格/行内代码用终端默认背景(不画主题色背景)
 
 	// Derived strings.
 	Codebg       string

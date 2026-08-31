@@ -146,14 +146,16 @@ func (r *Renderer) parse(input io.Reader, emit func(string)) {
 				s.codeBuffer = ""
 				s.codeBufferRaw = ""
 				s.codeFirstLine = true
-				s.bg = ANSIBG + r.Style.Dark
-				if r.Style.PrettyPad || r.Style.PrettyBroken {
-					if !r.Style.PrettyPad {
+				if !r.Style.PlainBackground {
+					s.bg = ANSIBG + r.Style.Dark
+					if r.Style.PrettyPad || r.Style.PrettyBroken {
+						if !r.Style.PrettyPad {
+							emit("")
+						}
+						emit(r.Style.Codepad[0])
+					} else {
 						emit("")
 					}
-					emit(r.Style.Codepad[0])
-				} else {
-					emit("")
 				}
 				if s.inCode == CodeBacktick {
 					continue
@@ -172,13 +174,15 @@ func (r *Renderer) parse(input io.Reader, emit func(string)) {
 				codeType := s.inCode
 				s.inCode = CodeNone
 				s.bg = ANSIBGReset
-				if r.Style.PrettyPad || r.Style.PrettyBroken {
-					emit(r.Style.Codepad[1])
-					if !r.Style.PrettyPad {
-						emit("")
+				if !r.Style.PlainBackground {
+					if r.Style.PrettyPad || r.Style.PrettyBroken {
+						emit(r.Style.Codepad[1])
+						if !r.Style.PrettyPad {
+							emit("")
+						}
+					} else {
+						emit(ANSIReset)
 					}
-				} else {
-					emit(ANSIReset)
 				}
 				if codeType == CodeBacktick {
 					continue
@@ -261,6 +265,11 @@ func (r *Renderer) parse(input io.Reader, emit func(string)) {
 					}
 
 					codeLine := strings.Repeat(" ", indent) + thisBatch
+					if r.Style.PlainBackground {
+						// 无背景:不发背景码与行尾填充,便于拷贝;仍保留缩进与前缀。
+						emit(pre[0] + pre[1] + codeLine + ANSIFmtReset)
+						continue
+					}
 					margin := s.fullWidth(-len(pre[1])) - visibleLength(codeLine)%s.widthFull
 					emit(pre[0] + r.Style.Codebg + pre[1] + codeLine + ANSIFmtReset +
 						strings.Repeat(" ", max(0, margin)) + ANSIBGReset)
