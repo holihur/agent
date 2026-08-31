@@ -9,8 +9,9 @@ import (
 	"agent/internal/tools"
 )
 
-// maxTurns 是防无限循环的保险丝:模型可能反复发起工具调用。
-const maxTurns = 10
+// maxTurns 是防无限循环的默认保险丝:模型可能反复发起工具调用;
+// 可经 Agent.MaxTurns 按次覆盖。
+const maxTurns = 60
 
 // ErrTooManyTurns 表示达到循环上限仍未得到最终回答。
 var ErrTooManyTurns = errors.New("agent: exceeded max turns without final answer")
@@ -25,6 +26,8 @@ type Agent struct {
 	Registry *tools.Registry // 工具来源(编排层依赖 tools 层)
 	System   string          // system prompt(协议要点 #1:顶层字段,不进 messages)
 	Hooks    *Hooks          // 生命周期钩子;nil = 无钩子(全部分发方法 nil 安全)
+	// MaxTurns 是单次 Run 的循环上限(防无限循环保险丝);零值/负值回落到默认 maxTurns。
+	MaxTurns int
 	// OnTextDelta 非 nil 且 LLM 支持 StreamingLLM 时,文本增量经此发出;
 	// 最终结果不受影响(流式只是传输形态)。
 	OnTextDelta func(TextDelta)
@@ -41,8 +44,9 @@ func (a *Agent) Run(ctx context.Context, user string) (string, error) {
 	a.Hooks.emitRunStart(UserInput{Text: user})
 	user = a.Hooks.chainUserInput(user)
 	a.Messages = append(a.Messages, Message{Role: RoleUser, Blocks: []Block{NewText(user)}})
+	limit := a.maxTurnsLimit()
 	turns := 0
-	for turn := 0; turn < maxTurns; turn++ {
+	for turn := 0; turn < limit; turn++ {
 		turns = turn + 1
 		req, err := a.turnRequest(ctx)
 		if err != nil {
@@ -76,8 +80,16 @@ func (a *Agent) Run(ctx context.Context, user string) (string, error) {
 		}
 		a.Messages = append(a.Messages, toolMsg)
 	}
-	a.Hooks.emitRunEnd(RunOutcome{Err: ErrTooManyTurns, Turns: maxTurns})
+	a.Hooks.emitRunEnd(RunOutcome{Err: ErrTooManyTurns, Turns: limit})
 	return "", ErrTooManyTurns
+}
+
+// maxTurnsLimit 返回本次 Run 的生效循环上限:显式配置优先,否则默认保险丝。
+func (a *Agent) maxTurnsLimit() int {
+	if a.MaxTurns > 0 {
+		return a.MaxTurns
+	}
+	return maxTurns
 }
 
 // turn 按能力选择调用形态:有增量消费者且适配器支持流式时走 TurnStream,否则 Turn。

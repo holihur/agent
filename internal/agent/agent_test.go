@@ -143,6 +143,42 @@ func TestRunTooManyTurns(t *testing.T) {
 	}
 }
 
+func TestMaxTurnsLimit(t *testing.T) {
+	ag := &Agent{}
+	for _, c := range []struct{ maxTurns, want int }{
+		{0, maxTurns},
+		{-3, maxTurns},
+		{3, 3},
+	} {
+		ag.MaxTurns = c.maxTurns
+		if got := ag.maxTurnsLimit(); got != c.want {
+			t.Fatalf("MaxTurns=%d: limit = %d, want %d", c.maxTurns, got, c.want)
+		}
+	}
+}
+
+func TestRunMaxTurnsOverride(t *testing.T) {
+	p := &fakeProvider{tools: []tools.ToolDef{{Name: "loop", Description: "d", InputSchema: map[string]any{"type": "object"}}}}
+	fl := &fakeLLM{loop: true, turns: []TurnResult{
+		{Assistant: Message{Role: RoleAssistant, Blocks: []Block{NewToolUse("tu", "loop", json.RawMessage(`{}`))}}, StopReason: "tool_use"},
+	}}
+	var outcome RunOutcome
+	ag := newTestAgent(t, fl, p)
+	ag.MaxTurns = 3
+	ag.Hooks = NewHooks()
+	ag.Hooks.OnRunEnd(func(o RunOutcome) { outcome = o })
+
+	if _, err := ag.Run(context.Background(), "go"); !errors.Is(err, ErrTooManyTurns) {
+		t.Fatalf("err = %v, want ErrTooManyTurns", err)
+	}
+	if n := len(fl.called); n != 3 {
+		t.Fatalf("llm turns = %d, want 3", n)
+	}
+	if outcome.Turns != 3 {
+		t.Fatalf("outcome.Turns = %d, want 3", outcome.Turns)
+	}
+}
+
 func TestRunLLMFailureFatal(t *testing.T) {
 	p := &fakeProvider{tools: []tools.ToolDef{{Name: "x", Description: "d", InputSchema: map[string]any{"type": "object"}}}}
 	fl := &fakeLLM{err: errors.New("network down")}
