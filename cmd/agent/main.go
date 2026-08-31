@@ -13,6 +13,8 @@
 //	agent -q "3+5 等于几" -mcp "gh=gh-mcp-server"  # 一次性执行
 //	agent -agents-md off                         # 禁用 AGENTS.md 注入(auto 默认从 cwd 逐层向上发现)
 //	agent -skills off                            # 禁用技能扫描(默认扫描 cwd 下 .agents/skills/)
+//	agent -shell off                             # 禁用内置 shell 工具(模型不再能执行命令)
+//	agent -shell-escape off                      # 禁用 REPL "!" shell 逃逸(仅用户手动触发,与 -shell 互不影响)
 //
 // MCP 服务器来源(可叠加,规范 docs/mcp.json.spec.md):
 //   - 文件:cwd 下 mcp.json(或 .mcp.json)的 mcpServers 对象(command=stdio / url=http)
@@ -190,9 +192,16 @@ func run() error {
 		model    = flag.String("model", "", "model override (default: LLM_MODEL or NAME_MODEL)")
 		maxToks  = flag.Int("max-tokens", 1024, "max_tokens per LLM turn")
 		maxTurns = flag.Int("max-turns", 60, "max think-act-observe turns per question (<=0 = default 60)")
+		shell    = flag.String("shell", "on", "builtin shell tool; off/none disables (main)")
 	)
 	flag.Var(&servers, "mcp", "MCP stdio server, repeatable: <name>=<command> [args...]")
 	flag.Parse()
+
+	switch *shell {
+	case "", "on", "off", "none":
+	default:
+		return fmt.Errorf("-shell must be on or off/none, got %q", *shell)
+	}
 
 	utils.LoadDotEnv(".env")
 
@@ -237,9 +246,15 @@ func run() error {
 	}
 
 	registry := tools.New()
-	builtin, err := tools.NewBuiltin()
-	if err != nil {
-		return err
+	// builtin 同时充当 hook 的进程内工具平面(如 skills 注册 skill 工具),
+	// -shell off 时保留空平面,只不注册 shell 工具。
+	builtin := tools.NewLocal()
+	if *shell != "off" && *shell != "none" {
+		var err error
+		builtin, err = tools.NewBuiltin()
+		if err != nil {
+			return err
+		}
 	}
 	if err := registry.Register(builtin); err != nil {
 		return err
