@@ -20,8 +20,8 @@ import (
 
 	"github.com/chzyer/readline"
 
-	"agent/internal/agent"
-	"agent/internal/tools"
+	"github.com/holihur/agent/internal/agent"
+	"github.com/holihur/agent/internal/tools"
 )
 
 // UI 是 CLI 交互实现:既是会话循环,也是 tools.Responder。

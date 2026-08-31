@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"agent/internal/tools"
+	"github.com/holihur/agent/internal/tools"
 )
 
 // ---- 测试替身 ----

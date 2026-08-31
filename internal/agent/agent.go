@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"agent/internal/tools"
+	"github.com/holihur/agent/internal/tools"
 )
 
 // maxTurns 是防无限循环的默认保险丝:模型可能反复发起工具调用;

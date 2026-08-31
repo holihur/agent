@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"agent/internal/agent"
+	"github.com/holihur/agent/internal/agent"
 )
 
 func TestInstallAllRunsInNameOrder(t *testing.T) {

@@ -8,7 +8,7 @@ import (
 	"io"
 	"strings"
 
-	"agent/internal/agent"
+	"github.com/holihur/agent/internal/agent"
 )
 
 // wireDelta 覆盖流式增量载荷的全部 delta 形状(按 type 区分)。

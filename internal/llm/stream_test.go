@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"agent/internal/agent"
+	"github.com/holihur/agent/internal/agent"
 )
 
 // sseServer 起一个假 /v1/messages,断言请求带 stream:true,回放给定 SSE 正文。

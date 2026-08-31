@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"agent/internal/agent"
-	"agent/internal/tools"
+	"github.com/holihur/agent/internal/agent"
+	"github.com/holihur/agent/internal/tools"
 )
 
 func writeAgentsMD(t *testing.T, dir, content string) string {

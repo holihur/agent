@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"agent/internal/tools"
+	"github.com/holihur/agent/internal/tools"
 )
 
 // ---- 测试替身:处理器式传输(按 method 生成应答) ----

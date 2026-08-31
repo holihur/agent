@@ -5,7 +5,7 @@ import (
 	"slices"
 	"time"
 
-	"agent/internal/tools"
+	"github.com/holihur/agent/internal/tools"
 )
 
 // Hooks 是 Agent 的扩展缝隙:功能扩展以注册钩子的形式提供,核心循环不再改动。

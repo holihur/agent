@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"agent/internal/agent"
-	"agent/internal/tools"
+	"github.com/holihur/agent/internal/agent"
+	"github.com/holihur/agent/internal/tools"
 )
 
 // 非 TTY(管道)路径:readline 不启用,走逐行兜底。

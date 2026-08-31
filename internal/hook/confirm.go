@@ -4,7 +4,7 @@ import (
 	"errors"
 	"flag"
 
-	"agent/internal/agent"
+	"github.com/holihur/agent/internal/agent"
 )
 
 var confirmTool = flag.Bool("confirm-tool", false, "ask before every tool call (hook)")

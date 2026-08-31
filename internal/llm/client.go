@@ -9,7 +9,7 @@ import (
 	"io"
 	"net/http"
 
-	"agent/internal/agent"
+	"github.com/holihur/agent/internal/agent"
 )
 
 const (

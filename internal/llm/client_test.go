@@ -8,7 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"agent/internal/agent"
+	"github.com/holihur/agent/internal/agent"
 )
 
 // newTestServer 起一个假 /v1/messages,把收到的请求解码后交给 check,

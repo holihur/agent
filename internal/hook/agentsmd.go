@@ -8,7 +8,7 @@ import (
 	"slices"
 	"strings"
 
-	"agent/internal/agent"
+	"github.com/holihur/agent/internal/agent"
 )
 
 var agentsMD = flag.String("agents-md", "auto", "AGENTS.md source: auto (discover from cwd up), off, or a file path (hook)")

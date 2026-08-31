@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"agent/internal/tools"
+	"github.com/holihur/agent/internal/tools"
 )
 
 // 协议常量(规范 §basic/index Per-request protocol fields)。

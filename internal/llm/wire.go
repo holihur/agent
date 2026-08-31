@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"agent/internal/agent"
+	"github.com/holihur/agent/internal/agent"
 )
 
 // ---- Anthropic Messages API wire 类型 ----

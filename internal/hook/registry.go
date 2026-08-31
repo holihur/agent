@@ -10,7 +10,7 @@ import (
 	"maps"
 	"slices"
 
-	"agent/internal/agent"
+	"github.com/holihur/agent/internal/agent"
 )
 
 // Installer 是一个功能的钩子装配动作:把该功能的钩子注册到 h 上。

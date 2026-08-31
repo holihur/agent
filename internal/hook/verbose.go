@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"agent/internal/agent"
+	"github.com/holihur/agent/internal/agent"
 )
 
 var verbose = flag.Bool("verbose", false, "print LLM turns and tool outcomes to stderr (hook)")

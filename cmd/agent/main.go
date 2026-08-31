@@ -23,13 +23,13 @@ import (
 	"regexp"
 	"strings"
 
-	"agent/internal/agent"
-	"agent/internal/hook"
-	"agent/internal/llm"
-	"agent/internal/mcp"
-	"agent/internal/tools"
-	uicli "agent/internal/ui/cli"
-	"agent/internal/utils"
+	"github.com/holihur/agent/internal/agent"
+	"github.com/holihur/agent/internal/hook"
+	"github.com/holihur/agent/internal/llm"
+	"github.com/holihur/agent/internal/mcp"
+	"github.com/holihur/agent/internal/tools"
+	uicli "github.com/holihur/agent/internal/ui/cli"
+	"github.com/holihur/agent/internal/utils"
 )
 
 // serverNameRe 与 tools 层命名空间校验保持一致(提前拦截,报错更友好)。
