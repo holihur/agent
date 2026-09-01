@@ -5,6 +5,16 @@
 
 ## 安装
 
+一键安装(macOS / Linux,自动识别架构、校验 sha256):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/holihur/agent/main/install.sh | sh
+```
+
+可选环境变量:`AGENT_VERSION`(指定 tag)、`AGENT_INSTALL_DIR`(安装目录,默认 `/usr/local/bin` 不可写时落到 `~/.local/bin`)。
+
+或用 Go:
+
 ```bash
 go install github.com/holihur/agent/cmd/agent@latest
 ```
