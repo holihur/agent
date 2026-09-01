@@ -57,6 +57,7 @@ import (
 	_ "github.com/holihur/agent/internal/hook/shell"
 	_ "github.com/holihur/agent/internal/hook/skills"
 	_ "github.com/holihur/agent/internal/hook/slashcmd"
+	_ "github.com/holihur/agent/internal/hook/termtitle"
 	_ "github.com/holihur/agent/internal/hook/verbose"
 )
 
