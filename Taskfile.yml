@@ -4,7 +4,7 @@ tasks:
   dev:
     desc: Build and run the agent (pprof enabled on localhost:6060, session persistence enabled)
     cmds:
-      - go build -o /tmp/agent ./cmd/agent && /tmp/agent -pprof on -session dev {{.CLI_ARGS}}
+      - go build -o /tmp/agent ./cmd/agent && /tmp/agent -pprof on -session dev  {{.CLI_ARGS}}
     env:
       LONGCAT_APIKEY: "{{.LONGCAT_APIKEY}}"
       LONGCAT_BASE_URL: "{{.LONGCAT_BASE_URL}}"
