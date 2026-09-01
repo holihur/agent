@@ -1,0 +1,102 @@
+# .goreleaser.yml
+# GoReleaser 配置: https://goreleaser.com
+
+project_name: agent
+
+# 构建前钩子
+before:
+  hooks:
+    - go mod tidy
+    - go generate ./...
+
+# 构建配置
+builds:
+  - id: agent
+    main: ./cmd/agent
+    binary: agent
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+      - "386"
+    goarm:
+      - "7"
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+      - -X main.builtBy=goreleaser
+
+# 归档配置
+archives:
+  - id: agent
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - LICENSE*
+      - README*
+      - docs/**/*
+
+# 校验和配置
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+# 快照配置(用于测试)
+snapshot:
+  name_template: "{{ incpatch .Version }}-next"
+
+# Changelog 配置
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - Merge pull request
+      - Merge branch
+  use: github
+
+# Docker 镜像(可选,需要时取消注释)
+# dockers:
+#   - image_templates:
+#       - "ghcr.io/holihur/agent:{{ .Version }}"
+#       - "ghcr.io/holihur/agent:latest"
+#     dockerfile: Dockerfile
+#     build_flag_templates:
+#       - "--pull"
+#       - "--label=org.opencontainers.image.created={{.Date}}"
+#       - "--label=org.opencontainers.image.title={{.ProjectName}}"
+#       - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+#       - "--label=org.opencontainers.image.version={{.Version}}"
+
+# Homebrew Tap(可选,发布到 homebrew-tap 仓库时启用)
+# brews:
+#   - name: agent
+#     repository:
+#       owner: holihur
+#       name: homebrew-tap
+#     directory: Formula
+#     homepage: "https://github.com/holihur/agent"
+#     description: "Minimal AI agent with MCP support"
+#     license: "MIT"
+#     test: |
+#       system "#{bin}/agent", "--version"
+#     dependencies: []
