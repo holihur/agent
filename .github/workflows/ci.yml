@@ -3,6 +3,8 @@ name: CI
 on:
   push:
     branches: [main]
+    # 不加 tags 过滤器时 tag push 事件不会触发任何工作流
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
