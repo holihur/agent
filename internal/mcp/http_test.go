@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -243,6 +244,101 @@ func TestHTTPNonJSONErrorBody(t *testing.T) {
 	err = tr.Send(frame)
 	if err == nil || !strings.Contains(err.Error(), "500") {
 		t.Fatalf("err = %v, want status 500 in message", err)
+	}
+}
+
+// TestHTTPUncorrelatableErrorBodyFailsFast 复现 BrowserOS 类服务器:500 + id:null
+// 错误体无法关联回请求 —— Send 必须立即报错,而非入队后让调用方挂死到超时。
+func TestHTTPUncorrelatableErrorBodyFailsFast(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"jsonrpc":"2.0","error":{"code":-32603,"message":"Internal server error"},"id":null}`))
+	}))
+	defer srv.Close()
+
+	tr, err := dialHTTP(context.Background(), HTTPConfig{URL: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tr.Close()
+
+	frame, _ := json.Marshal(rpcRequest{JSONRPC: "2.0", ID: int64p(1), Method: "tools/list"})
+	done := make(chan error, 1)
+	go func() { done <- tr.Send(frame) }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "500") {
+			t.Fatalf("err = %v, want status 500 in message", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Send blocked on uncorrelatable 500 body")
+	}
+}
+
+// TestHTTPLegacyFallbackNegotiatesVersionHeader 端到端回归:server/discover → 500(id:null),
+// 客户端必须回退 legacy,且 initialize 起(含 initialized 通知与 tools/list)都携带 2025-06-18 版本头。
+func TestHTTPLegacyFallbackNegotiatesVersionHeader(t *testing.T) {
+	var mu sync.Mutex
+	headerByMethod := map[string]string{}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		var fr rpcRequest
+		if json.NewDecoder(req.Body).Decode(&fr) != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
+		headerByMethod[fr.Method] = req.Header.Get("MCP-Protocol-Version")
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		switch fr.Method {
+		case "server/discover":
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"jsonrpc":"2.0","error":{"code":-32603,"message":"Internal server error"},"id":null}`))
+		case "initialize":
+			var p struct {
+				ProtocolVersion string `json:"protocolVersion"`
+			}
+			_ = json.Unmarshal(fr.Params, &p)
+			w.Write(replyJSON(*fr.ID, map[string]any{
+				"protocolVersion": p.ProtocolVersion,
+				"capabilities":    map[string]any{},
+				"serverInfo":      map[string]any{"name": "fake-legacy", "version": "0.0.1"},
+			}))
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			w.Write(replyJSON(*fr.ID, map[string]any{
+				"resultType": "complete",
+				"tools": []map[string]any{{
+					"name": "echo", "description": "d",
+					"inputSchema": map[string]any{"type": "object"},
+				}},
+				"nextCursor": "",
+			}))
+		default:
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+	defer srv.Close()
+
+	p := NewHTTP("remote", HTTPConfig{URL: srv.URL}, nil)
+	defer p.Close()
+	defs, err := p.ListTools(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(defs) != 1 || defs[0].Name != "echo" {
+		t.Fatalf("defs = %+v", defs)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	for _, m := range []string{"initialize", "notifications/initialized", "tools/list"} {
+		if got := headerByMethod[m]; got != legacyProtocolVersion {
+			t.Errorf("%s MCP-Protocol-Version = %q, want %q", m, got, legacyProtocolVersion)
+		}
 	}
 }
 

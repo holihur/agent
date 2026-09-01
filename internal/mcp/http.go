@@ -33,12 +33,13 @@ func dialHTTP(_ context.Context, cfg HTTPConfig) (Transport, error) {
 	}
 	base, cancel := context.WithCancel(context.Background())
 	return &httpTransport{
-		cfg:    cfg,
-		base:   base,
-		cancel: cancel,
-		client: http.Client{},
-		frames: make(chan []byte, 16),
-		closed: make(chan struct{}),
+		cfg:      cfg,
+		base:     base,
+		cancel:   cancel,
+		client:   http.Client{},
+		protoVer: protocolVersion,
+		frames:   make(chan []byte, 16),
+		closed:   make(chan struct{}),
 	}, nil
 }
 
@@ -52,6 +53,7 @@ type httpTransport struct {
 
 	mu        sync.Mutex
 	session   string // Mcp-Session-Id:服务器指派后必须回显(规范 §transports)
+	protoVer  string // MCP-Protocol-Version 头:握手确定服务器时代后回写(默认 modern)
 	frames    chan []byte
 	closed    chan struct{}
 	closeOnce sync.Once
@@ -70,15 +72,17 @@ func (t *httpTransport) Send(b []byte) error {
 	if err != nil {
 		return fmt.Errorf("mcp: http request: %w", err)
 	}
+	t.mu.Lock()
+	pv, sid := t.protoVer, t.session
+	t.mu.Unlock()
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
-	req.Header.Set("MCP-Protocol-Version", protocolVersion)
+	// 协议版本头按握手协商结果携带:部分 legacy 服务器对不认识的版本直接 500
+	// (如 BrowserOS 对非 initialize 请求回 500 + id:null),因此不能永远发 modern 版本。
+	req.Header.Set("MCP-Protocol-Version", pv)
 	for k, v := range t.cfg.Headers {
 		req.Header.Set(k, v)
 	}
-	t.mu.Lock()
-	sid := t.session
-	t.mu.Unlock()
 	if sid != "" {
 		req.Header.Set("Mcp-Session-Id", sid)
 	}
@@ -104,6 +108,13 @@ func (t *httpTransport) Send(b []byte) error {
 	}
 }
 
+// setProtocolVersion 在握手确定服务器时代后回写协议版本头(仅 HTTP 传输有此概念)。
+func (t *httpTransport) setProtocolVersion(v string) {
+	t.mu.Lock()
+	t.protoVer = v
+	t.mu.Unlock()
+}
+
 // consumeJSON 读取单帧 application/json 响应;非 JSON-RPC 形状的错误体转明确错误。
 func (t *httpTransport) consumeJSON(resp *http.Response) error {
 	defer resp.Body.Close()
@@ -117,7 +128,9 @@ func (t *httpTransport) consumeJSON(resp *http.Response) error {
 		Result json.RawMessage `json:"result"`
 		Error  *rpcError       `json:"error"`
 	}
-	if json.Unmarshal(body, &msg) == nil && (msg.ID != nil || msg.Result != nil || msg.Error != nil) {
+	// 只有能关联回请求的响应(id 非空)才算帧:id:null 的错误体入队后会被
+	// readLoop 静默丢弃,调用方将挂死到超时 —— 必须在这里立即报错。
+	if json.Unmarshal(body, &msg) == nil && msg.ID != nil {
 		select {
 		case t.frames <- body:
 			return nil

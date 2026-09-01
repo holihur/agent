@@ -155,7 +155,12 @@ func (p *Provider) handshake(ctx context.Context, c *rpcClient) (string, error) 
 }
 
 // legacyInitialize 完成 2025-06-18 语义的 initialize 握手。
+// HTTP 传输在此把协议版本头回写为 legacy:进入本函数即已确认服务器非 modern,
+// 后续所有请求(含 initialize 自身)都应携带服务器认识的版本。
 func legacyInitialize(ctx context.Context, c *rpcClient) error {
+	if vs, ok := c.tr.(interface{ setProtocolVersion(string) }); ok {
+		vs.setProtocolVersion(legacyProtocolVersion)
+	}
 	pctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 	res, err := c.call(pctx, "initialize", map[string]any{
