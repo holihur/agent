@@ -29,6 +29,10 @@ import (
 type UI struct {
 	Agent *agent.Agent
 
+	// Model 是启动 banner 显示的当前模型名(由 cmd 注入最终解析值);
+	// 空 = 不打印 banner(嵌入式等未配置模型的场景)。
+	Model string
+
 	// AfterRun 非 nil 时,每次 runOnce 结束(无论成败)以该次运行错误回调
 	// (如会话自动保存);成功时实参为 nil。
 	AfterRun func(runErr error)
@@ -110,6 +114,9 @@ func (u *UI) TextDeltaSink() func(agent.TextDelta) {
 func (u *UI) Run(ctx context.Context) error {
 	u.startRL()
 	defer u.stopRL()
+	if u.Model != "" {
+		u.write(fmt.Sprintf("agent — model: %s\n", u.Model))
+	}
 	for {
 		line, err := u.readLine("> ")
 		switch {

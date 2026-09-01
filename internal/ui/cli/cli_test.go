@@ -37,6 +37,29 @@ func TestScannerFallbackEOF(t *testing.T) {
 	}
 }
 
+func TestRunBannerShowsModel(t *testing.T) {
+	var out bytes.Buffer
+	ui := New(strings.NewReader("exit\n"), &out)
+	ui.Model = "glm-5.3-flash"
+	if err := ui.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "agent — model: glm-5.3-flash") {
+		t.Fatalf("banner missing model: %q", out.String())
+	}
+}
+
+func TestRunNoBannerWithoutModel(t *testing.T) {
+	var out bytes.Buffer
+	ui := New(strings.NewReader("exit\n"), &out)
+	if err := ui.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "model:") {
+		t.Fatalf("empty model must not print banner: %q", out.String())
+	}
+}
+
 func TestScannerFallbackSlashExit(t *testing.T) {
 	// "/exit" 与 "/quit" 属于 REPL 循环控制,直接退出、不进对话循环。
 	for _, line := range []string{"/exit", "/quit"} {

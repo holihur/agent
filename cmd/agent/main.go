@@ -355,6 +355,7 @@ func run() error {
 	ag := &agent.Agent{LLM: llmClient, Registry: registry, System: *system, Hooks: hooks, MaxTurns: *maxTurns}
 
 	ui.Agent = ag                       // 两阶段装配:Responder(即 UI)先于 Agent 可用
+	ui.Model = llmClient.Model          // banner 显示最终解析的模型(env/flag/provider 归一后)
 	ag.OnTextDelta = ui.TextDeltaSink() // 流式增量 → 终端
 
 	// 会话持久化:-session 指定时,启动续接(不存在则新建),每轮 Run 后自动保存。
