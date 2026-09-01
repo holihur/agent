@@ -33,6 +33,10 @@ type UI struct {
 	// 空 = 不打印 banner(嵌入式等未配置模型的场景)。
 	Model string
 
+	// NewSession 非 nil 时接管 REPL 的 /new:开启新会话(如持久会话轮转),
+	// 返回展示给用户的提示文本;nil 时由 UI 直接清空内存对话历史。
+	NewSession func() string
+
 	// AfterRun 非 nil 时,每次 runOnce 结束(无论成败)以该次运行错误回调
 	// (如会话自动保存);成功时实参为 nil。
 	AfterRun func(runErr error)
@@ -136,6 +140,10 @@ func (u *UI) Run(ctx context.Context) error {
 		if line == "exit" || line == "quit" || line == "/exit" || line == "/quit" {
 			return nil
 		}
+		if line == "/new" {
+			u.newSession()
+			continue
+		}
 		if u.Agent == nil {
 			u.write("error: agent not wired\n")
 			continue
@@ -150,6 +158,23 @@ func (u *UI) Run(ctx context.Context) error {
 			continue
 		}
 	}
+}
+
+// newSession 处理 /new:NewSession 回调优先(持久会话轮转由装配层接管);
+// 未装配时直接清空内存对话历史,不触碰持久会话文件。
+func (u *UI) newSession() {
+	if u.NewSession != nil {
+		if note := u.NewSession(); note != "" {
+			u.write(note + "\n")
+		}
+		return
+	}
+	if u.Agent == nil {
+		u.write("error: agent not wired\n")
+		return
+	}
+	u.Agent.Messages = nil
+	u.write("session: new (history cleared)\n")
 }
 
 // runOnce 完成一次问答的收尾:流式期间已输出的文本不再重复打印;

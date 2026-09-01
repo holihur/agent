@@ -36,6 +36,9 @@ func TestRunSlashHelp(t *testing.T) {
 	if !strings.Contains(out, "/help") || !strings.Contains(out, "/exit") {
 		t.Fatalf("help must list commands, got %q", out)
 	}
+	if !strings.Contains(out, "/new") {
+		t.Fatalf("help must list /new, got %q", out)
+	}
 	if !strings.Contains(out, "Ctrl-R") || !strings.Contains(out, "Ctrl-U") {
 		t.Fatalf("help must list readline editing keys, got %q", out)
 	}

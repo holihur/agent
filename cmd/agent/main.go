@@ -361,6 +361,8 @@ func run() error {
 	ag.OnTextDelta = ui.TextDeltaSink() // 流式增量 → 终端
 
 	// 会话持久化:-session 指定时,启动续接(不存在则新建),每轮 Run 后自动保存。
+	// /new 轮转:NewSession 与 AfterRun 共享 active 变量,轮转后自动保存落新文件,
+	// 旧会话文件原样保留;轮转失败保持原状(fail-loud 提示,不清历史)。
 	if *sessName != "" {
 		msgs, err := store.Load(ctx, *sessName)
 		switch {
@@ -372,10 +374,21 @@ func run() error {
 		default:
 			return err
 		}
+		active := *sessName
 		ui.AfterRun = func(runErr error) {
-			if err := store.Save(ctx, *sessName, ag.Messages); err != nil {
+			if err := store.Save(ctx, active, ag.Messages); err != nil {
 				fmt.Fprintf(os.Stderr, "session: save: %v\n", err)
 			}
+		}
+		ui.NewSession = func() string {
+			next, err := session.NextName(ctx, store, active)
+			if err != nil {
+				return fmt.Sprintf("session: rotate failed: %v (history kept)", err)
+			}
+			kept := active
+			active = next
+			ag.Messages = nil
+			return fmt.Sprintf("session: new %s (kept %s)", next, kept)
 		}
 	}
 

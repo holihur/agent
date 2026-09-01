@@ -60,6 +60,48 @@ func TestRunNoBannerWithoutModel(t *testing.T) {
 	}
 }
 
+func TestSlashNewClearsMessages(t *testing.T) {
+	var out bytes.Buffer
+	ui := New(strings.NewReader("/new\nexit\n"), &out)
+	ui.Agent = &agent.Agent{Messages: []agent.Message{
+		{Role: agent.RoleUser, Blocks: []agent.Block{agent.NewText("hi")}},
+	}}
+	if err := ui.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(ui.Agent.Messages) != 0 {
+		t.Fatalf("/new must clear in-memory history, got %d messages", len(ui.Agent.Messages))
+	}
+	if !strings.Contains(out.String(), "session: new") {
+		t.Fatalf("missing /new note: %q", out.String())
+	}
+}
+
+func TestSlashNewDelegatesToCallback(t *testing.T) {
+	var out bytes.Buffer
+	ui := New(strings.NewReader("/new\nexit\n"), &out)
+	ui.Agent = &agent.Agent{Messages: []agent.Message{
+		{Role: agent.RoleUser, Blocks: []agent.Block{agent.NewText("hi")}},
+	}}
+	called := false
+	ui.NewSession = func() string {
+		called = true
+		return "session: new work-2 (kept work)"
+	}
+	if err := ui.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("NewSession callback must be invoked on /new")
+	}
+	if !strings.Contains(out.String(), "session: new work-2 (kept work)") {
+		t.Fatalf("callback note missing: %q", out.String())
+	}
+	if len(ui.Agent.Messages) != 1 {
+		t.Fatalf("callback owns state; UI must not clear messages itself, got %d", len(ui.Agent.Messages))
+	}
+}
+
 func TestScannerFallbackSlashExit(t *testing.T) {
 	// "/exit" 与 "/quit" 属于 REPL 循环控制,直接退出、不进对话循环。
 	for _, line := range []string{"/exit", "/quit"} {

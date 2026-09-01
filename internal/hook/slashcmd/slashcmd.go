@@ -41,6 +41,7 @@ func enabled(mode string) bool {
 const helpText = `REPL commands:
   /help, /h        print this help
   /exit, /quit     exit the REPL (bare exit/quit also work)
+  /new             start a new session (clears history; with -session rotates to a fresh name, old kept)
   !<cmd>           run a shell command, e.g. !git status
 
 Input starting with "/" is treated as a command; anything else goes to the model.

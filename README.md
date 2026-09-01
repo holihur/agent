@@ -115,6 +115,7 @@ agent -fs off           # 禁用内置文件工具 read/write/edit:模型不再�
 ```bash
 /help        # 打印帮助文档(列出全部 REPL 命令)
 /exit /quit  # 退出(裸 exit/quit 亦可)
+/new         # 新会话:清空对话历史;-session 时轮转到空闲新名(如 work-2),旧会话保留
 !cmd         # shell 逃逸,如 !git status(见上节)
 ```
 

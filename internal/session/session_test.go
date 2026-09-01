@@ -196,3 +196,41 @@ func TestFileStoreOversizedLine(t *testing.T) {
 		t.Fatalf("err = %v, want scanner failure", err)
 	}
 }
+
+func TestNextName(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	store := NewFileStore(dir)
+
+	// 空 store:work → work-2
+	got, err := NextName(ctx, store, "work")
+	if err != nil || got != "work-2" {
+		t.Fatalf("NextName(work) = %q, %v; want work-2", got, err)
+	}
+
+	// 落盘 work 与 work-2 后:work → work-3
+	for _, n := range []string{"work", "work-2"} {
+		if err := store.Save(ctx, n, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err = NextName(ctx, store, "work")
+	if err != nil || got != "work-3" {
+		t.Fatalf("NextName(work) = %q, %v; want work-3", got, err)
+	}
+
+	// base 自带计数:work-2 → 顺着 work-4(work-3 未占用则取 work-3)
+	if err := store.Save(ctx, "work-3", nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err = NextName(ctx, store, "work-2")
+	if err != nil || got != "work-4" {
+		t.Fatalf("NextName(work-2) = %q, %v; want work-4", got, err)
+	}
+
+	// 无计数后缀的怪名:数字后缀不合法时按 1 处理
+	got, err = NextName(ctx, store, "weird")
+	if err != nil || got != "weird-2" {
+		t.Fatalf("NextName(weird) = %q, %v; want weird-2", got, err)
+	}
+}

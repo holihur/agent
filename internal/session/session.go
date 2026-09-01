@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/holihur/agent/internal/agent"
@@ -26,6 +27,9 @@ import (
 
 // namePattern 约束会话名([a-zA-Z0-9_-],1-64)防路径逃逸;与 tools 层命名空间校验同型。
 var namePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
+
+// maxNameLen 与 namePattern 的 64 上限一致;NextName 用它封顶派生名长度。
+const maxNameLen = 64
 
 // FileStore 是 SessionStore 的文件实现:dir 内每个会话一个 <name>.jsonl。
 type FileStore struct {
@@ -133,6 +137,41 @@ func (s *FileStore) Delete(_ context.Context, name string) error {
 }
 
 func (s *FileStore) path(name string) string { return filepath.Join(s.dir, name+".jsonl") }
+
+// NextName 返回 base 的下一个空闲会话名,供 REPL /new 轮转使用:
+// base 尾部若带 "-<数字>" 计数则数字递增(work-3 → work-4),否则从
+// work-2 起;与现有会话重名则继续递增,直到首个空闲名。
+func NextName(ctx context.Context, s agent.SessionStore, base string) (string, error) {
+	names, err := s.Names(ctx)
+	if err != nil {
+		return "", err
+	}
+	taken := make(map[string]bool, len(names))
+	for _, n := range names {
+		taken[n] = true
+	}
+	stem, n := splitCounter(base)
+	// 预留 "-" + 最多 10 位计数,派生名不越过 namePattern 的 64 上限
+	if len(stem) > maxNameLen-12 {
+		stem = stem[:maxNameLen-12]
+	}
+	for i := n + 1; ; i++ {
+		cand := stem + "-" + strconv.Itoa(i)
+		if !taken[cand] {
+			return cand, nil
+		}
+	}
+}
+
+// splitCounter 拆出尾部 "-<数字>" 计数:"work-3" → ("work", 3);"work" → ("work", 1)。
+func splitCounter(name string) (string, int) {
+	if i := strings.LastIndex(name, "-"); i > 0 {
+		if n, err := strconv.Atoi(name[i+1:]); err == nil {
+			return name[:i], n
+		}
+	}
+	return name, 1
+}
 
 // ---- 存储 wire(键名与 llm wire 层一致;域↔存储双向映射) ----
 
