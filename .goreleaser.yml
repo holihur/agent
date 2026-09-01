@@ -1,6 +1,8 @@
 # .goreleaser.yml
 # GoReleaser 配置: https://goreleaser.com
 
+version: 2
+
 project_name: agent
 
 # 构建前钩子
