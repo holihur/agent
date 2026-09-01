@@ -16,15 +16,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 
 	"github.com/chzyer/readline"
-	"golang.org/x/term"
 
 	"github.com/holihur/agent/internal/agent"
 	"github.com/holihur/agent/internal/tools"
-	"github.com/holihur/agent/pkg/streamdown"
 )
 
 // UI 是 CLI 交互实现:既是会话循环,也是 tools.Responder。
@@ -41,13 +38,6 @@ type UI struct {
 	rl       *readline.Instance // TTY 会话;nil = 逐行兜底
 	scanner  *bufio.Scanner
 	streamed bool // 本轮已流式输出(收尾不重复打印答案)
-
-	// markdown 渲染(mdOn 时开启):每个回答一个渲染生命周期。
-	// 流式增量经 io.Pipe 喂给渲染器,渲染输出走 readline 感知的 write。
-	mdOn   bool
-	md     *streamdown.Renderer
-	mdPipe *io.PipeWriter
-	mdDone chan struct{}
 }
 
 func New(in io.Reader, out io.Writer) *UI {
@@ -55,24 +45,7 @@ func New(in io.Reader, out io.Writer) *UI {
 		in:      in,
 		out:     out,
 		scanner: bufio.NewScanner(in),
-		mdOn:    terminalWidth(out) > 0, // auto:输出为 TTY 时默认开启
 	}
-}
-
-// SetMarkdown 开关回答的 markdown 终端渲染(默认按输出是否 TTY 自动决定)。
-func (u *UI) SetMarkdown(on bool) { u.mdOn = on }
-
-// terminalWidth 返回输出终端宽度;非 TTY/不可测时为 0(渲染器回落 80)。
-func terminalWidth(out io.Writer) int {
-	f, ok := out.(*os.File)
-	if !ok || !term.IsTerminal(int(f.Fd())) {
-		return 0
-	}
-	w, _, err := term.GetSize(int(f.Fd()))
-	if err != nil || w <= 0 {
-		return 0
-	}
-	return w
 }
 
 // startRL 在 TTY 上启动 readline。延迟到 Run 才启动:
@@ -122,69 +95,12 @@ func (u *UI) readLine(prompt string) (string, error) {
 	return u.scanner.Text(), nil
 }
 
-// TextDeltaSink 返回接给 Agent.OnTextDelta 的增量渲染函数。
-// markdown 开启时增量喂给渲染器(流式);否则原文直写。
+// TextDeltaSink 返回接给 Agent.OnTextDelta 的流式增量输出函数。
 func (u *UI) TextDeltaSink() func(agent.TextDelta) {
 	return func(d agent.TextDelta) {
 		u.streamed = true
-		if u.md != nil && u.mdPipe != nil {
-			_, _ = u.mdPipe.Write([]byte(d.Text))
-			return
-		}
 		u.write(d.Text)
 	}
-}
-
-// mdBegin 开启一个回答的 markdown 渲染会话:渲染器 + io.Pipe + 消费 goroutine。
-// 渲染输出经 u.write 写出(readline 感知);宽度取输出终端,非 TTY 回落 80。
-func (u *UI) mdBegin() {
-	if !u.mdOn {
-		return
-	}
-	cfg := streamdown.DefaultConfig()
-	cfg.Width = terminalWidth(u.out)
-	var err error
-	u.md, err = streamdown.New(mdWriter{u}, cfg)
-	if err != nil {
-		u.md = nil
-		return
-	}
-	pr, pw := io.Pipe()
-	u.mdPipe = pw
-	u.mdDone = make(chan struct{})
-	go func() {
-		defer close(u.mdDone)
-		_ = u.md.Render(pr)
-	}()
-}
-
-// mdEnd 结束当前回答:关闭管道等待渲染完成;未流式时把整段回答也渲染一遍;
-// 最后 Tidyup 复位终端。任何路径都不允许泄漏 goroutine。
-func (u *UI) mdEnd(answer string, streamed bool) {
-	if u.md == nil {
-		return
-	}
-	if u.mdPipe != nil {
-		_ = u.mdPipe.Close()
-		u.mdPipe = nil
-	}
-	if u.mdDone != nil {
-		<-u.mdDone
-		u.mdDone = nil
-	}
-	if !streamed && answer != "" {
-		_ = u.md.RenderString(answer)
-	}
-	u.md.Tidyup()
-	u.md = nil
-}
-
-// mdWriter 把渲染器输出转发到 readline 感知的 write。
-type mdWriter struct{ u *UI }
-
-func (w mdWriter) Write(p []byte) (int, error) {
-	w.u.write(string(p))
-	return len(p), nil
 }
 
 // Run 启动 REPL:"> " 提示 → 读行 → agent.Run → 打印。
@@ -229,17 +145,14 @@ func (u *UI) Run(ctx context.Context) error {
 	}
 }
 
-// runOnce 完成一次问答的渲染收尾:流式期间已输出的文本不再重复打印;
-// 错误时先补换行保持终端整洁。markdown 开启时整段回答由渲染器输出。
+// runOnce 完成一次问答的收尾:流式期间已输出的文本不再重复打印;
+// 错误时先补换行保持终端整洁。
 func (u *UI) runOnce(ctx context.Context, line string) (string, error) {
 	if u.Agent == nil {
 		return "", errors.New("agent not wired")
 	}
 	u.streamed = false
-	u.mdBegin()
-	mdActive := u.md != nil
 	answer, err := u.Agent.Run(ctx, line)
-	u.mdEnd(answer, u.streamed)
 	if u.AfterRun != nil {
 		u.AfterRun(err)
 	}
@@ -247,13 +160,10 @@ func (u *UI) runOnce(ctx context.Context, line string) (string, error) {
 		if errors.Is(err, context.Canceled) {
 			return "", err
 		}
-		if u.streamed && !mdActive {
-			u.write("\n") // 渲染器输出以换行收尾,原文直出才需补行
+		if u.streamed {
+			u.write("\n")
 		}
 		return "", err
-	}
-	if mdActive {
-		return answer, nil // 已由渲染器输出(流式或整段),无需再写
 	}
 	if u.streamed {
 		u.write("\n")

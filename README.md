@@ -108,17 +108,6 @@ agent -shell-escape off # 禁用 REPL 的 "!" shell 逃逸:仅影响用户手动
 agent -fs off           # 禁用内置文件工具 read/write/edit:模型不再能直接读写文件
 ```
 
-## Markdown 渲染
-
-回答(流式与一次性)默认经 `pkg/streamdown` 渲染成带 ANSI 颜色的终端 markdown
-(标题/表格/列表/引用/代码块等,见上节)。`auto` 下仅在输出为 TTY 时开启:
-
-```bash
-agent -markdown on     # 强制开启(管道输出也渲染)
-agent -markdown off    # 关闭,原文直出
-agent -markdown auto   # 默认:stdout 为 TTY 时开启
-```
-
 ## REPL 命令
 
 交互模式下,以 `/` 开头的输入按命令处理(拦截在对话循环之前,不进历史、不调模型):

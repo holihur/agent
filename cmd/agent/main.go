@@ -205,7 +205,6 @@ func run() error {
 		effort   = flag.String("reasoning-effort", "", "reasoning effort passed through, e.g. low/medium/high; empty = endpoint default (main)")
 		shell    = flag.String("shell", "on", "builtin shell tool; off/none disables (main)")
 		fs       = flag.String("fs", "on", "builtin file tools read/write/edit; off/none disables (main)")
-		markdown = flag.String("markdown", "auto", "markdown terminal rendering of answers; on/off/auto (auto = TTY)")
 		sessName = flag.String("session", "", "persistent session name: resume if exists, autosave each turn (main)")
 		sessList = flag.Bool("sessions", false, "list saved sessions and exit (main)")
 	)
@@ -221,11 +220,6 @@ func run() error {
 	case "", "on", "off", "none":
 	default:
 		return fmt.Errorf("-fs must be on or off/none, got %q", *fs)
-	}
-	switch *markdown {
-	case "", "on", "off", "auto":
-	default:
-		return fmt.Errorf("-markdown must be on, off or auto, got %q", *markdown)
 	}
 
 	utils.LoadDotEnv(".env")
@@ -302,13 +296,6 @@ func run() error {
 	}
 
 	ui := uicli.New(os.Stdin, os.Stdout)
-	switch *markdown {
-	case "on":
-		ui.SetMarkdown(true)
-	case "off":
-		ui.SetMarkdown(false)
-	default: // "" / "auto":New 已按输出是否 TTY 决定
-	}
 
 	// 生命周期钩子:每个 hook 是 internal/hook/ 下一个子包,init 自注册,
 	// 上方 blank-import 激活;这里只统一装配 InstallAll。
