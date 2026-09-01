@@ -2,9 +2,9 @@ version: '3'
 
 tasks:
   dev:
-    desc: Build and run the agent
+    desc: Build and run the agent (pprof enabled on localhost:6060)
     cmds:
-      - go build -o /tmp/agent ./cmd/agent && /tmp/agent {{.CLI_ARGS}}
+      - go build -o /tmp/agent ./cmd/agent && /tmp/agent -pprof on {{.CLI_ARGS}}
     env:
       LONGCAT_APIKEY: "{{.LONGCAT_APIKEY}}"
       LONGCAT_BASE_URL: "{{.LONGCAT_BASE_URL}}"
