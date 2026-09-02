@@ -45,6 +45,7 @@ import (
 
 	"github.com/holihur/agent/internal/agent"
 	"github.com/holihur/agent/internal/hook"
+	"github.com/holihur/agent/internal/hook/slashcmd"
 	"github.com/holihur/agent/internal/llm"
 	"github.com/holihur/agent/internal/mcp"
 	"github.com/holihur/agent/internal/session"
@@ -411,6 +412,8 @@ func run() error {
 			return err
 		}
 		active := *sessName
+		// 供 /compact 手动压缩使用
+		slashcmd.SetCompactContext(store, &active, &ag.Messages, &compressCfg)
 		ui.AfterRun = func(runErr error) {
 			if err := store.Save(ctx, active, ag.Messages); err != nil {
 				fmt.Fprintf(os.Stderr, "session: save: %v\n", err)
