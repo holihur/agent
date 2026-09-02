@@ -367,7 +367,17 @@ func runCompact(args string) string {
 	if keep > 0 {
 		cfg.KeepRecent = keep
 	}
-	// 强制压缩，忽略阈值
+	// 手动强制压缩：即使 keep >= len 也要产生摘要，避免“复制”
+	if len(msgs) <= cfg.KeepRecent {
+		if len(msgs) > 1 {
+			cfg.KeepRecent = len(msgs) - 1
+			if cfg.KeepRecent < 1 {
+				cfg.KeepRecent = 1
+			}
+		} else {
+			return "compact: only 1 message, nothing to compress"
+		}
+	}
 	newMsgs, err := session.CompressMessages(context.Background(), msgs, cfg)
 	if err != nil {
 		return fmt.Sprintf("compact failed: %v", err)
