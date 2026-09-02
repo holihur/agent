@@ -25,11 +25,11 @@ func init() {
 func installVerbose(h *agent.Hooks, _ hook.Deps) error {
 	if *verbose {
 		h.OnBeforeLLM(func(s agent.TurnStat) {
-			fmt.Fprintf(os.Stderr, "[llm] turn %d: messages=%d tools=%d\n", s.Turn, s.Messages, s.Tools)
+			fmt.Fprintf(os.Stderr, "[llm] turn %d: messages=%d tools=%d\r\n", s.Turn, s.Messages, s.Tools)
 		})
 		h.OnAfterLLM(func(s agent.TurnStat) {
 			// After 日志紧随流式增量，可能停在行中；前置换行确保从行首开始，避免与正文同行导致“不从左边开始”
-			fmt.Fprintf(os.Stderr, "\n[llm] turn %d: stop=%s blocks=%d\n", s.Turn, s.StopReason, s.Blocks)
+			fmt.Fprintf(os.Stderr, "\r\n[llm] turn %d: stop=%s blocks=%d\r\n", s.Turn, s.StopReason, s.Blocks)
 		})
 	}
 	if *displayToolcall {
@@ -41,7 +41,7 @@ func installVerbose(h *agent.Hooks, _ hook.Deps) error {
 				preview = preview[:300] + "…"
 			}
 			// 使用工具名本身作为括号前缀，符合期望的 [edit] 样式
-			fmt.Fprintf(os.Stderr, "[%s] %s\n", c.Name, preview)
+			fmt.Fprintf(os.Stderr, "[%s] %s\r\n", c.Name, preview)
 			return agent.Decision{}
 		})
 		h.OnAfterTool(func(o agent.ToolOutcome) {
@@ -53,7 +53,7 @@ func installVerbose(h *agent.Hooks, _ hook.Deps) error {
 				status = "error"
 			}
 			// 同上，确保工具结果日志从行首开始
-			fmt.Fprintf(os.Stderr, "\n[%s] -> %s (%s)\n", o.Name, status, o.Duration.Round(time.Millisecond))
+			fmt.Fprintf(os.Stderr, "\r\n[%s] -> %s (%s)\r\n", o.Name, status, o.Duration.Round(time.Millisecond))
 		})
 	}
 	if *displayThinking {
@@ -69,7 +69,7 @@ func installVerbose(h *agent.Hooks, _ hook.Deps) error {
 					if len(text) > 500 {
 						text = text[:500] + "…"
 					}
-					fmt.Fprintf(os.Stderr, "[thinking] %s\n", text)
+					fmt.Fprintf(os.Stderr, "[thinking] %s\r\n", text)
 				}
 			}
 			return m

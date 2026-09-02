@@ -98,9 +98,13 @@ func (u *UI) stopRL() {
 }
 
 // write 经 readline 输出(屏幕感知,避免行编辑重绘错位)。并发安全。
+// 在 ESC 监听的 raw 期间，终端已清 OPOST，\n 不会自动回车，需显式转为 \r\n
 func (u *UI) write(s string) {
 	u.writeMu.Lock()
 	defer u.writeMu.Unlock()
+	if u.isRunning() {
+		s = strings.ReplaceAll(s, "\n", "\r\n")
+	}
 	if u.rl != nil {
 		_, _ = u.rl.Write([]byte(s))
 		return
@@ -284,12 +288,8 @@ func (u *UI) startEscMonitor(runCtx context.Context, cancel context.CancelFunc) 
 	if err != nil {
 		return func() {}
 	}
-	// MakeRaw 会清 OPOST 导致 \n 不回行首，verbose/流式输出会偏右；
-	// 这里把输出回车映射加回来，保持 \n -> \r\n 的行为。
-	if ts, err2 := unix.IoctlGetTermios(fd, unix.TIOCGETA); err2 == nil {
-		ts.Oflag |= unix.OPOST | unix.ONLCR
-		_ = unix.IoctlSetTermios(fd, unix.TIOCSETA, ts)
-	}
+	// 注意：不在此处修复 OPOST，改为在 write 中显式处理 \n -> \r\n，
+	// 避免引入平台相关的 TIOCGETA/TCGETS 分支导致 Linux CI 编译失败。
 	done := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(1)
