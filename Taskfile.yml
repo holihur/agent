@@ -2,9 +2,16 @@ version: '3'
 
 tasks:
   dev:
-    desc: Build and run the agent (pprof enabled on localhost:6060, session persistence enabled)
+    desc: Build and run the agent (pprof on localhost:6060, session persistence, verbose optional)
     cmds:
-      - go build -o /tmp/agent ./cmd/agent && /tmp/agent -pprof on -session dev  {{.CLI_ARGS}}
+      - go build -o /tmp/agent ./cmd/agent && /tmp/agent -pprof on -session dev -verbose {{.CLI_ARGS}}
+    dotenv: ['.env']
+    silent: false
+
+  dev:verbose:
+    desc: Run in verbose mode (full request/response logging)
+    cmds:
+      - go build -o /tmp/agent ./cmd/agent && /tmp/agent -pprof on -session dev -verbose -verbose {{.CLI_ARGS}}
     env:
       LONGCAT_APIKEY: "{{.LONGCAT_APIKEY}}"
       LONGCAT_BASE_URL: "{{.LONGCAT_BASE_URL}}"
@@ -17,13 +24,29 @@ tasks:
     cmds:
       - go build -o /tmp/agent ./cmd/agent
 
+  build:verbose:
+    desc: Build with verbose output
+    cmds:
+      - go build -v -x -o /tmp/agent ./cmd/agent 2>&1
+
   test:
     desc: Run all tests
     cmds:
       - go test ./...
 
+  test:verbose:
+    desc: Run all tests with verbose output
+    cmds:
+      - go test -v ./...
+
   run:
     desc: Run the built binary (requires `task build` first)
     cmds:
       - /tmp/agent {{.CLI_ARGS}}
+    dotenv: ['.env']
+
+  run:verbose:
+    desc: Run in verbose mode
+    cmds:
+      - /tmp/agent -verbose {{.CLI_ARGS}}
     dotenv: ['.env']

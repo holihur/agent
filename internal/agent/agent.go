@@ -80,6 +80,9 @@ func (a *Agent) Run(ctx context.Context, user string) (string, error) {
 		}
 		toolMsg, err := a.execTools(ctx, res.Assistant, turn)
 		if err != nil {
+			if len(toolMsg.Blocks) > 0 {
+				a.Messages = append(a.Messages, toolMsg)
+			}
 			a.Hooks.emitRunEnd(RunOutcome{Err: err, Turns: turns})
 			return "", err
 		}
@@ -125,10 +128,21 @@ func (a *Agent) turnRequest(ctx context.Context) (TurnRequest, error) {
 // execTools 顺序执行 assistant 消息里的全部 tool_use 块。
 // 协议要点 #3:一轮的多个 tool_use → 合并为一条 user 消息里的多个 tool_result 块。
 // 执行链:MutateToolInput → BeforeTool 裁决(可拒绝) → 执行 → MutateToolResult → 回填。
+// ESC 中断:若上下文在执行期间被取消,剩余 tool_use 以 interrupted 标记合成结果,
+// 并返回 context.Canceled,使外层 Run 在保持历史有效(tool_use 均有对应 tool_result)
+// 的前提下中断循环。readlineLoop 负责提示并回到输入等待。
 func (a *Agent) execTools(ctx context.Context, assistant Message, turn int) (Message, error) {
 	var results []Block
+	var canceled error
 	for _, b := range assistant.Blocks {
 		if b.Type != BlockToolUse {
+			continue
+		}
+		if ctx.Err() != nil {
+			if canceled == nil {
+				canceled = ctx.Err()
+			}
+			results = append(results, NewToolResult(b.ID, "interrupted: "+ctx.Err().Error(), true))
 			continue
 		}
 		call := a.Hooks.chainToolInput(ToolCall{Turn: turn, Name: b.Name, Input: b.Input})
@@ -140,6 +154,27 @@ func (a *Agent) execTools(ctx context.Context, assistant Message, turn int) (Mes
 		}
 		res, err := a.Registry.Call(ctx, call.Name, call.Input)
 		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+				if canceled == nil {
+					if ctx.Err() != nil {
+						canceled = ctx.Err()
+					} else {
+						canceled = err
+					}
+				}
+				text := "interrupted: context canceled"
+				if ctx.Err() != nil {
+					text = "interrupted: " + ctx.Err().Error()
+				} else {
+					text = "interrupted: " + err.Error()
+				}
+				results = append(results, NewToolResult(b.ID, text, true))
+				a.Hooks.emitAfterTool(ToolOutcome{
+					Turn: turn, Name: b.Name, Text: text, IsError: true,
+					Err: err, Duration: time.Since(start),
+				})
+				continue
+			}
 			// 工具失败不打断循环:错误文本回填给模型,让它自行决策。
 			res = tools.ToolResult{Text: "error: " + err.Error(), IsError: true}
 		}
@@ -153,5 +188,12 @@ func (a *Agent) execTools(ctx context.Context, assistant Message, turn int) (Mes
 	if len(results) == 0 {
 		return Message{}, errors.New("agent: stop_reason=tool_use but assistant issued no tool_use blocks")
 	}
-	return Message{Role: RoleUser, Blocks: results}, nil
+	msg := Message{Role: RoleUser, Blocks: results}
+	if canceled != nil {
+		return msg, canceled
+	}
+	if ctx.Err() != nil {
+		return msg, ctx.Err()
+	}
+	return msg, nil
 }

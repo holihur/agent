@@ -56,12 +56,29 @@ type Message struct {
 }
 
 // TextContent 拼接消息中所有 text 块(以换行连接),作为最终回答。
+// 若无 text 块但有 thinking 块（推理模型常见），则回退到 thinking 内容，避免“有 block 却空白”的情况。
 func (m Message) TextContent() string {
-	parts := make([]string, 0, len(m.Blocks))
+	var textParts []string
+	var thinkingParts []string
 	for _, b := range m.Blocks {
-		if b.Type == BlockText {
-			parts = append(parts, b.Text)
+		switch b.Type {
+		case BlockText:
+			if s := strings.TrimSpace(b.Text); s != "" {
+				textParts = append(textParts, b.Text)
+			} else if b.Text != "" {
+				textParts = append(textParts, b.Text)
+			}
+		case BlockThinking:
+			if b.Text != "" {
+				thinkingParts = append(thinkingParts, b.Text)
+			}
 		}
 	}
-	return strings.Join(parts, "\n")
+	if len(textParts) > 0 {
+		return strings.Join(textParts, "\n")
+	}
+	if len(thinkingParts) > 0 {
+		return strings.Join(thinkingParts, "\n")
+	}
+	return ""
 }
