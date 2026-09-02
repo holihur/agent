@@ -35,10 +35,13 @@ func installVerbose(h *agent.Hooks, _ hook.Deps) error {
 	if *displayToolcall {
 		// tool 调用打印为 [edit] / [read] 等形式（去掉通用 [tool] 前缀）
 		h.OnBeforeTool(func(c agent.ToolCall) agent.Decision {
-			// 简化输入预览，避免过长刷屏
+			// 简化输入预览，避免过长刷屏；按 rune 截断避免中文被切半，且压成单行避免阶梯错位
 			preview := strings.TrimSpace(string(c.Input))
-			if len(preview) > 300 {
-				preview = preview[:300] + "…"
+			preview = strings.ReplaceAll(preview, "\r\n", "\n")
+			preview = strings.ReplaceAll(preview, "\r", "\n")
+			preview = strings.ReplaceAll(preview, "\n", " ")
+			if r := []rune(preview); len(r) > 300 {
+				preview = string(r[:300]) + "…"
 			}
 			// 使用工具名本身作为括号前缀，符合期望的 [edit] 样式
 			fmt.Fprintf(os.Stderr, "[%s] %s\r\n", c.Name, preview)
@@ -57,7 +60,6 @@ func installVerbose(h *agent.Hooks, _ hook.Deps) error {
 		})
 	}
 	if *displayThinking {
-		// thinking 块打印为 [thinking]，默认展示
 		h.OnMutateAssistant(func(m agent.Message) agent.Message {
 			for _, b := range m.Blocks {
 				if b.Type == agent.BlockThinking {
@@ -65,10 +67,12 @@ func installVerbose(h *agent.Hooks, _ hook.Deps) error {
 					if text == "" {
 						continue
 					}
-					// 限制长度，避免刷屏；完整思考可在 verbose 或会话文件中查看
-					if len(text) > 500 {
-						text = text[:500] + "…"
+					text = strings.ReplaceAll(text, "\r\n", "\n")
+					text = strings.ReplaceAll(text, "\r", "\n")
+					if r := []rune(text); len(r) > 500 {
+						text = string(r[:500]) + "…"
 					}
+					text = strings.ReplaceAll(text, "\n", "\r\n")
 					fmt.Fprintf(os.Stderr, "[thinking] %s\r\n", text)
 				}
 			}
