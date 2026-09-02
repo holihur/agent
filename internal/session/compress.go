@@ -2,6 +2,8 @@ package session
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -143,22 +145,36 @@ func CompressMessages(ctx context.Context, msgs []agent.Message, cfg Config) ([]
 	return out, nil
 }
 
-// NextCompressedName 生成压缩后的新会话名，规则：dev -> dev_1, dev_1 -> dev_2。
+// GenerateSID 生成全新的会话 ID，格式 s_<xid>，xid 为 8 字符 hex。
+func GenerateSID() string {
+	b := make([]byte, 4)
+	_, _ = rand.Read(b)
+	return "s_" + hex.EncodeToString(b)
+}
+
+// NextCompressedName 生成压缩后的新会话名，规则：s_xid -> s_xid_1 -> s_xid_2。
+// 兼容任意 base：若 base 已是 s_xid_n 则递增 n，否则从 1 开始。
 func NextCompressedName(base string, existing []string) string {
 	taken := make(map[string]bool, len(existing))
 	for _, n := range existing {
 		taken[n] = true
 	}
-	// 已是 dev_数字 形式则递增
 	stem, num := splitCounterUnderscore(base)
-	// 若 base 本身不含下划线数字，stem=base, num=0
 	for i := num + 1; ; i++ {
 		cand := fmt.Sprintf("%s_%d", stem, i)
 		if len(cand) > maxNameLen {
 			cand = cand[:maxNameLen]
 		}
 		if !namePattern.MatchString(cand) {
-			cand = fmt.Sprintf("%s_%d", stem[:maxNameLen-4], i)
+			// 截断 stem 以容纳 _数字
+			cut := maxNameLen - len(fmt.Sprintf("_%d", i))
+			if cut < 1 {
+				cut = 1
+			}
+			if len(stem) > cut {
+				stem = stem[:cut]
+			}
+			cand = fmt.Sprintf("%s_%d", stem, i)
 		}
 		if !taken[cand] {
 			return cand

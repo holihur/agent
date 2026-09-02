@@ -59,13 +59,14 @@ func TestMaybeCompress(t *testing.T) {
 	for i := range msgs {
 		msgs[i] = agent.Message{Role: agent.RoleUser, Blocks: []agent.Block{{Type: agent.BlockText, Text: string(make([]byte, 50))}}}
 	}
-	store.Save(context.Background(), "dev", msgs)
-	newName, newMsgs, ok, err := MaybeCompress(context.Background(), store, "dev", msgs, cfg)
+	base := "s_a1b2c3d4"
+	store.Save(context.Background(), base, msgs)
+	newName, newMsgs, ok, err := MaybeCompress(context.Background(), store, base, msgs, cfg)
 	if err != nil || !ok {
 		t.Fatalf("compress failed %v ok %v", err, ok)
 	}
-	if newName != "dev_1" {
-		t.Fatalf("expect dev_1 got %s", newName)
+	if newName != "s_a1b2c3d4_1" {
+		t.Fatalf("expect s_a1b2c3d4_1 got %s", newName)
 	}
 	if len(newMsgs) != 3 {
 		t.Fatalf("expect 3 got %d", len(newMsgs))
@@ -74,14 +75,33 @@ func TestMaybeCompress(t *testing.T) {
 	if len(names) != 2 {
 		t.Fatalf("expect 2 names got %v", names)
 	}
-	// second compress dev_1 -> dev_2
 	msgs2 := append(newMsgs, msgs...)
 	newName2, _, ok2, err := MaybeCompress(context.Background(), store, newName, msgs2, cfg)
 	if err != nil || !ok2 {
 		t.Fatalf("second compress failed")
 	}
-	if newName2 != "dev_2" {
-		t.Fatalf("expect dev_2 got %s", newName2)
+	if newName2 != "s_a1b2c3d4_2" {
+		t.Fatalf("expect s_a1b2c3d4_2 got %s", newName2)
+	}
+}
+
+func TestGenerateSID(t *testing.T) {
+	id := GenerateSID()
+	if len(id) != 10 || id[:2] != "s_" {
+		t.Fatalf("expect s_ prefix 10 len got %q", id)
+	}
+	id2 := GenerateSID()
+	if id == id2 {
+		t.Fatal("should be random")
+	}
+}
+
+func TestNextCompressedName(t *testing.T) {
+	if got := NextCompressedName("s_abc123", []string{"s_abc123"}); got != "s_abc123_1" {
+		t.Fatalf("got %q", got)
+	}
+	if got := NextCompressedName("s_abc123_1", []string{"s_abc123", "s_abc123_1"}); got != "s_abc123_2" {
+		t.Fatalf("got %q", got)
 	}
 }
 
