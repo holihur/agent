@@ -55,6 +55,7 @@ import (
 	// 钩子功能包:各自在 init 中向 hook 注册(新增功能 = 新增子目录 + 此处一行)。
 	_ "github.com/holihur/agent/internal/hook/agentsmd"
 	_ "github.com/holihur/agent/internal/hook/confirm"
+	_ "github.com/holihur/agent/internal/hook/perm"
 	_ "github.com/holihur/agent/internal/hook/pprof"
 	_ "github.com/holihur/agent/internal/hook/shell"
 	_ "github.com/holihur/agent/internal/hook/skills"
@@ -299,6 +300,7 @@ func run() error {
 	}
 
 	ui := uicli.New(os.Stdin, os.Stdout)
+	ui.CWD = cwd
 
 	// 生命周期钩子:每个 hook 是 internal/hook/ 下一个子包,init 自注册,
 	// 上方 blank-import 激活;这里只统一装配 InstallAll。

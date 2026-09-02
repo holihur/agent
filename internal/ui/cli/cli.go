@@ -26,8 +26,16 @@ import (
 	"golang.org/x/term"
 
 	"github.com/holihur/agent/internal/agent"
+	"github.com/holihur/agent/internal/permission"
 	"github.com/holihur/agent/internal/tools"
 )
+
+// test hooks for unit testing
+var isTerminal = term.IsTerminal
+var makeRaw = term.MakeRaw
+var termRestore = term.Restore
+var pollFunc = unix.Poll
+var readFunc = unix.Read
 
 // UI 是 CLI 交互实现:既是会话循环,也是 tools.Responder。
 // Agent 由 cmd 在装配完成后注入(两阶段装配)。
@@ -46,6 +54,9 @@ type UI struct {
 	// (如会话自动保存);成功时实参为 nil。
 	AfterRun func(runErr error)
 
+	// CWD 是项目根，用于权限持久化路径解析；由 cmd 注入。
+	CWD string
+
 	in       io.Reader
 	out      io.Writer
 	rl       *readline.Instance // TTY 会话;nil = 逐行兜底
@@ -61,6 +72,8 @@ type UI struct {
 
 	promptMu     sync.Mutex
 	promptActive bool // readLine 是否正在等待用户输入（用于 ESC 监听避免抢输入）
+
+	readLineFunc func(prompt string) (string, error) // for testing, if set overrides readLine
 }
 
 func New(in io.Reader, out io.Writer) *UI {
@@ -113,6 +126,9 @@ func (u *UI) write(s string) {
 }
 
 func (u *UI) readLine(prompt string) (string, error) {
+	if u.readLineFunc != nil {
+		return u.readLineFunc(prompt)
+	}
 	u.promptMu.Lock()
 	u.promptActive = true
 	u.promptMu.Unlock()
@@ -281,10 +297,10 @@ func (u *UI) startEscMonitor(runCtx context.Context, cancel context.CancelFunc) 
 		return func() {}
 	}
 	fd := int(os.Stdin.Fd())
-	if !term.IsTerminal(fd) {
+	if !isTerminal(fd) {
 		return func() {}
 	}
-	oldState, err := term.MakeRaw(fd)
+	oldState, err := makeRaw(fd)
 	if err != nil {
 		return func() {}
 	}
@@ -295,7 +311,7 @@ func (u *UI) startEscMonitor(runCtx context.Context, cancel context.CancelFunc) 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		defer term.Restore(fd, oldState)
+		defer termRestore(fd, oldState)
 		pollFds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
 		buf := make([]byte, 1)
 		for {
@@ -310,7 +326,7 @@ func (u *UI) startEscMonitor(runCtx context.Context, cancel context.CancelFunc) 
 			// 但仍需监听 ESC 以支持中断确认
 			if u.isPromptActive() {
 				// 轻量探测：用 Poll 快速检查是否有 ESC/Ctrl-C，有则处理，无则让出
-				n, _ := unix.Poll(pollFds, 20)
+				n, _ := pollFunc(pollFds, 20)
 				if n == 0 {
 					select {
 					case <-runCtx.Done():
@@ -322,16 +338,16 @@ func (u *UI) startEscMonitor(runCtx context.Context, cancel context.CancelFunc) 
 					}
 				}
 				// 有输入，peek 一个字节
-				nr, err := unix.Read(fd, buf)
+				nr, err := readFunc(fd, buf)
 				if err != nil || nr == 0 {
 					continue
 				}
 				b := buf[0]
 				if b == 27 {
-					n2, _ := unix.Poll(pollFds, 20)
+					n2, _ := pollFunc(pollFds, 20)
 					if n2 > 0 {
 						var drain [8]byte
-						_, _ = unix.Read(fd, drain[:])
+						_, _ = readFunc(fd, drain[:])
 						continue
 					}
 					u.write("\n[esc] interrupted\n")
@@ -349,7 +365,7 @@ func (u *UI) startEscMonitor(runCtx context.Context, cancel context.CancelFunc) 
 				}
 				continue
 			}
-			n, pollErr := unix.Poll(pollFds, 100)
+			n, pollErr := pollFunc(pollFds, 100)
 			if pollErr != nil {
 				if pollErr == unix.EINTR {
 					continue
@@ -362,16 +378,16 @@ func (u *UI) startEscMonitor(runCtx context.Context, cancel context.CancelFunc) 
 			if pollFds[0].Revents&unix.POLLIN == 0 {
 				continue
 			}
-			nr, readErr := unix.Read(fd, buf)
+			nr, readErr := readFunc(fd, buf)
 			if readErr != nil || nr == 0 {
 				continue
 			}
 			b := buf[0]
 			if b == 27 {
-				n2, _ := unix.Poll(pollFds, 20)
+				n2, _ := pollFunc(pollFds, 20)
 				if n2 > 0 {
 					var drain [8]byte
-					_, _ = unix.Read(fd, drain[:])
+					_, _ = readFunc(fd, drain[:])
 					continue
 				}
 				u.write("\n[esc] interrupted\n")
@@ -463,17 +479,60 @@ func (u *UI) RunOnce(ctx context.Context, question string) error {
 }
 
 // ConfirmHook 返回工具确认钩子:每次工具调用前向用户请求放行。
-// 默认拒绝 —— 直接回车或任何非 y 答复都会拒绝执行。
 func (u *UI) ConfirmHook() func(agent.ToolCall) agent.Decision {
 	return func(c agent.ToolCall) agent.Decision {
-		v, err := u.readLine(fmt.Sprintf("allow %s(%s)? [y/N] ", c.Name, preview(string(c.Input))))
+		if allowed, denied, pat, _ := permission.CheckWithDeny(u.CWD, c); denied {
+			u.write(fmt.Sprintf("[perm] auto-deny %s matched deny %s\n", c.Name, pat))
+			return agent.Decision{Deny: true, Reason: "denied by permission " + pat}
+		} else if allowed {
+			u.write(fmt.Sprintf("[perm] auto-allow %s matched %s\n", c.Name, pat))
+			return agent.Decision{}
+		}
+		v, err := u.readLine(fmt.Sprintf("allow %s(%s)? [y/N/a] ", c.Name, preview(string(c.Input))))
 		if err != nil {
 			return agent.Decision{Deny: true, Reason: "input closed"}
 		}
-		switch strings.TrimSpace(strings.ToLower(v)) {
+		raw := strings.TrimSpace(v)
+		low := strings.ToLower(raw)
+		switch low {
 		case "y", "yes":
 			return agent.Decision{}
+		case "a", "always", "y!", "yes!":
+			if err := permission.Allow(u.CWD, c.Name, "", false); err != nil {
+				u.write(fmt.Sprintf("[perm] save failed: %v\n", err))
+			} else {
+				u.write(fmt.Sprintf("[perm] persisted allow %s -> %s\n", c.Name, permission.ProjectPath(u.CWD)))
+			}
+			return agent.Decision{}
 		default:
+			if strings.HasPrefix(low, "a ") || strings.HasPrefix(low, "always ") {
+				pat := strings.TrimSpace(raw[1:])
+				if strings.HasPrefix(low, "always ") {
+					pat = strings.TrimSpace(raw[6:])
+					if strings.HasPrefix(strings.ToLower(pat), "always ") {
+						pat = strings.TrimSpace(pat[6:])
+					}
+				} else {
+					// "a " 情况已去掉首字符，需处理 "a always ..." 变体
+					if strings.HasPrefix(strings.ToLower(pat), "always ") {
+						pat = strings.TrimSpace(pat[6:])
+					}
+				}
+				if pat == "" {
+					pat = c.Name
+				}
+				inputPat := ""
+				if idx := strings.Index(pat, "|"); idx >= 0 {
+					inputPat = strings.TrimSpace(pat[idx+1:])
+					pat = strings.TrimSpace(pat[:idx])
+				}
+				if err := permission.Allow(u.CWD, pat, inputPat, false); err != nil {
+					u.write(fmt.Sprintf("[perm] save failed: %v\n", err))
+				} else {
+					u.write(fmt.Sprintf("[perm] persisted allow %s (input:%s) -> %s\n", pat, inputPat, permission.ProjectPath(u.CWD)))
+				}
+				return agent.Decision{}
+			}
 			return agent.Decision{Deny: true, Reason: "user denied"}
 		}
 	}

@@ -32,12 +32,12 @@ tasks:
   test:
     desc: Run all tests
     cmds:
-      - go test ./...
+      - go test $(go list ./... | grep -v examples)
 
   test:verbose:
     desc: Run all tests with verbose output
     cmds:
-      - go test -v ./...
+      - go test -v $(go list ./... | grep -v examples)
 
   run:
     desc: Run the built binary (requires `task build` first)

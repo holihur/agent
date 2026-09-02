@@ -69,7 +69,7 @@ func (m Message) TextContent() string {
 				textParts = append(textParts, b.Text)
 			}
 		case BlockThinking:
-			if b.Text != "" {
+			if s := strings.TrimSpace(b.Text); s != "" {
 				thinkingParts = append(thinkingParts, b.Text)
 			}
 		}
