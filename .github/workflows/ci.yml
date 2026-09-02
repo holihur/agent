@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   test:
@@ -31,6 +32,8 @@ jobs:
         uses: codecov/codecov-action@v5
         with:
           files: coverage.out
+          use_oidc: true
+          verbose: true
 
   # GoReleaser 发布(仅在打 tag 时触发)
   release:
