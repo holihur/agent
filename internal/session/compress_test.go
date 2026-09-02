@@ -18,7 +18,7 @@ func TestEstimateTokens(t *testing.T) {
 }
 
 func TestShouldCompress(t *testing.T) {
-	cfg := Config{MaxTokens: 100, Ratio: 0.8, KeepRecent: 2, Compressor: SimpleCompressor{}}
+	cfg := Config{MaxTokens: 100, Ratio: 0.8, KeepRecent: 2, Compressor: LLMCompressor{Summarize: func(ctx context.Context, prompt string) (string, error) { return "summary", nil }}}
 	msgs := make([]agent.Message, 10)
 	for i := range msgs {
 		msgs[i] = agent.Message{Role: agent.RoleUser, Blocks: []agent.Block{{Type: agent.BlockText, Text: string(make([]byte, 50))}}}
@@ -33,7 +33,7 @@ func TestShouldCompress(t *testing.T) {
 }
 
 func TestCompressMessages(t *testing.T) {
-	cfg := Config{MaxTokens: 100, Ratio: 0.8, KeepRecent: 2, Compressor: SimpleCompressor{}}
+	cfg := Config{MaxTokens: 100, Ratio: 0.8, KeepRecent: 2, Compressor: LLMCompressor{Summarize: func(ctx context.Context, prompt string) (string, error) { return "summary", nil }}}
 	msgs := make([]agent.Message, 5)
 	for i := range msgs {
 		msgs[i] = agent.Message{Role: agent.RoleUser, Blocks: []agent.Block{{Type: agent.BlockText, Text: "msg"}}}
@@ -54,7 +54,7 @@ func TestMaybeCompress(t *testing.T) {
 	dir, _ := os.MkdirTemp("", "compress")
 	defer os.RemoveAll(dir)
 	store := NewFileStore(dir)
-	cfg := Config{MaxTokens: 100, Ratio: 0.8, KeepRecent: 2, Compressor: SimpleCompressor{}}
+	cfg := Config{MaxTokens: 100, Ratio: 0.8, KeepRecent: 2, Compressor: LLMCompressor{Summarize: func(ctx context.Context, prompt string) (string, error) { return "summary", nil }}}
 	msgs := make([]agent.Message, 10)
 	for i := range msgs {
 		msgs[i] = agent.Message{Role: agent.RoleUser, Blocks: []agent.Block{{Type: agent.BlockText, Text: string(make([]byte, 50))}}}

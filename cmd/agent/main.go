@@ -366,12 +366,27 @@ func run() error {
 	ui.Model = llmClient.Model          // banner 显示最终解析的模型(env/flag/provider 归一后)
 	ag.OnTextDelta = ui.TextDeltaSink() // 流式增量 → 终端
 
-	// 会话压缩配置
+	// 会话压缩配置：接口化，LLM 压缩为唯一实现
+	compressor := session.LLMCompressor{
+		Summarize: func(ctx context.Context, prompt string) (string, error) {
+			req := agent.TurnRequest{
+				System: "You are a helpful assistant that summarizes conversation history concisely, preserving key decisions and tool results.",
+				Messages: []agent.Message{
+					{Role: agent.RoleUser, Blocks: []agent.Block{{Type: agent.BlockText, Text: prompt}}},
+				},
+			}
+			res, err := llmClient.Turn(ctx, req)
+			if err != nil {
+				return "", err
+			}
+			return res.Assistant.TextContent(), nil
+		},
+	}
 	compressCfg := session.Config{
 		MaxTokens:  *compressMax,
 		Ratio:      *compressRatio,
 		KeepRecent: *compressKeep,
-		Compressor: session.SimpleCompressor{},
+		Compressor: compressor,
 	}
 	compressEnabled := *compressMode != "off" && *compressMode != "none"
 	if compressEnabled {

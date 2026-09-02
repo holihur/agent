@@ -10,39 +10,9 @@ import (
 )
 
 // Compressor 是会话压缩算法的接口，便于切换不同实现。
-// 例如：SimpleCompressor（截断占位）、LLMCompressor（调用模型总结）。
 type Compressor interface {
 	Name() string
 	Compress(ctx context.Context, msgs []agent.Message) (string, error)
-}
-
-// SimpleCompressor 仅做占位截断，返回固定格式摘要，不依赖 LLM。
-type SimpleCompressor struct{}
-
-func (SimpleCompressor) Name() string { return "simple" }
-
-func (SimpleCompressor) Compress(_ context.Context, msgs []agent.Message) (string, error) {
-	if len(msgs) == 0 {
-		return "", nil
-	}
-	var b strings.Builder
-	b.WriteString(fmt.Sprintf("[compressed %d messages]\n", len(msgs)))
-	// 提取每条消息的首行文本作为摘要，避免过长
-	limit := 20
-	if len(msgs) < limit {
-		limit = len(msgs)
-	}
-	for i := 0; i < limit; i++ {
-		m := msgs[i]
-		txt := messagePreview(m)
-		if txt != "" {
-			fmt.Fprintf(&b, "- %s: %s\n", m.Role, truncate(txt, 120))
-		}
-	}
-	if len(msgs) > limit {
-		fmt.Fprintf(&b, "... and %d more messages\n", len(msgs)-limit)
-	}
-	return b.String(), nil
 }
 
 // LLMCompressor 通过 LLM 总结历史，需外部注入 SummarizeFn。
@@ -54,7 +24,7 @@ func (c LLMCompressor) Name() string { return "llm" }
 
 func (c LLMCompressor) Compress(ctx context.Context, msgs []agent.Message) (string, error) {
 	if c.Summarize == nil {
-		return SimpleCompressor{}.Compress(ctx, msgs)
+		return "", fmt.Errorf("session compress: LLMCompressor Summarize is nil")
 	}
 	var b strings.Builder
 	b.WriteString("Summarize the following conversation history concisely, preserving key decisions, tool results, and user intent:\n\n")
@@ -77,12 +47,13 @@ type Config struct {
 }
 
 // DefaultConfig 返回默认配置：100w 80% 触发，保留最后 6 条消息。
+// Compressor 需外部注入（如 LLMCompressor），未注入时 Validate 会失败。
 func DefaultConfig() Config {
 	return Config{
 		MaxTokens:  100000,
 		Ratio:      0.8,
 		KeepRecent: 6,
-		Compressor: SimpleCompressor{},
+		Compressor: nil,
 	}
 }
 
