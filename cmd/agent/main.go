@@ -437,9 +437,14 @@ func run() error {
 			}
 		}
 		ui.NewSession = func() string {
-			next, err := session.NextName(ctx, store, active)
-			if err != nil {
-				return fmt.Sprintf("session: rotate failed: %v (history kept)", err)
+			// 全新会话一律 s_xid，压缩产生的 s_xid_n 由 MaybeCompress 负责
+			var next string
+			for {
+				cand := session.GenerateSID()
+				if _, err := store.Load(ctx, cand); err != nil {
+					next = cand
+					break
+				}
 			}
 			kept := active
 			active = next
