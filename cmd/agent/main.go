@@ -198,19 +198,23 @@ func main() {
 
 func run() error {
 	var (
-		servers  mcpFlags
-		quick    = flag.String("q", "", "one-shot question (default: interactive REPL)")
-		system   = flag.String("system", defaultSystem, "system prompt")
-		provider = flag.String("provider", "", "env prefix: NAME reads NAME_API_KEY/NAME_APIKEY, NAME_BASE_URL, NAME_MODEL")
-		model    = flag.String("model", "", "model override (default: LLM_MODEL or NAME_MODEL)")
-		maxToks  = flag.Int("max-tokens", 1024, "max_tokens per LLM turn")
-		maxTurns = flag.Int("max-turns", 60, "max think-act-observe turns per question (<=0 = default 60)")
-		temp     = flag.Float64("temperature", -1, "sampling temperature; <0 = endpoint default (main)")
-		effort   = flag.String("reasoning-effort", "", "reasoning effort passed through, e.g. low/medium/high; empty = endpoint default (main)")
-		shell    = flag.String("shell", "on", "builtin shell tool; off/none disables (main)")
-		fs       = flag.String("fs", "on", "builtin file tools read/write/edit; off/none disables (main)")
-		sessName = flag.String("session", "", "persistent session name: resume if exists, autosave each turn (main)")
-		sessList = flag.Bool("sessions", false, "list saved sessions and exit (main)")
+		servers       mcpFlags
+		quick         = flag.String("q", "", "one-shot question (default: interactive REPL)")
+		system        = flag.String("system", defaultSystem, "system prompt")
+		provider      = flag.String("provider", "", "env prefix: NAME reads NAME_API_KEY/NAME_APIKEY, NAME_BASE_URL, NAME_MODEL")
+		model         = flag.String("model", "", "model override (default: LLM_MODEL or NAME_MODEL)")
+		maxToks       = flag.Int("max-tokens", 1024, "max_tokens per LLM turn")
+		maxTurns      = flag.Int("max-turns", 60, "max think-act-observe turns per question (<=0 = default 60)")
+		temp          = flag.Float64("temperature", -1, "sampling temperature; <0 = endpoint default (main)")
+		effort        = flag.String("reasoning-effort", "", "reasoning effort passed through, e.g. low/medium/high; empty = endpoint default (main)")
+		shell         = flag.String("shell", "on", "builtin shell tool; off/none disables (main)")
+		fs            = flag.String("fs", "on", "builtin file tools read/write/edit; off/none disables (main)")
+		sessName      = flag.String("session", "", "persistent session name: resume if exists, autosave each turn (main)")
+		sessList      = flag.Bool("sessions", false, "list saved sessions and exit (main)")
+		compressMode  = flag.String("session-compress", "auto", "session compress: auto/on/off (auto triggers at threshold)")
+		compressMax   = flag.Int("compress-max-tokens", 100000, "session compress max tokens (e.g. 100000)")
+		compressRatio = flag.Float64("compress-ratio", 0.8, "session compress trigger ratio 0-1 (e.g. 0.8 means 80%)")
+		compressKeep  = flag.Int("compress-keep", 6, "recent messages to keep after compress")
 	)
 	flag.Var(&servers, "mcp", "MCP stdio server, repeatable: <name>=<command> [args...]")
 	flag.Parse()
@@ -362,15 +366,30 @@ func run() error {
 	ui.Model = llmClient.Model          // banner 显示最终解析的模型(env/flag/provider 归一后)
 	ag.OnTextDelta = ui.TextDeltaSink() // 流式增量 → 终端
 
+	// 会话压缩配置
+	compressCfg := session.Config{
+		MaxTokens:  *compressMax,
+		Ratio:      *compressRatio,
+		KeepRecent: *compressKeep,
+		Compressor: session.SimpleCompressor{},
+	}
+	compressEnabled := *compressMode != "off" && *compressMode != "none"
+	if compressEnabled {
+		if err := compressCfg.Validate(); err != nil {
+			return fmt.Errorf("compress config: %w", err)
+		}
+	}
+
 	// 会话持久化:-session 指定时,启动续接(不存在则新建),每轮 Run 后自动保存。
 	// /new 轮转:NewSession 与 AfterRun 共享 active 变量,轮转后自动保存落新文件,
 	// 旧会话文件原样保留;轮转失败保持原状(fail-loud 提示,不清历史)。
+	// 压缩：达到阈值（默认 100w*80%）时自动压缩为新会话 dev_1，保留最近 N 条，接口化可切换 LLM 压缩
 	if *sessName != "" {
 		msgs, err := store.Load(ctx, *sessName)
 		switch {
 		case err == nil:
 			ag.Messages = msgs
-			fmt.Fprintf(os.Stderr, "session: resumed %s (%d messages)\n", *sessName, len(msgs))
+			fmt.Fprintf(os.Stderr, "session: resumed %s (%d messages, ~%d tokens)\n", *sessName, len(msgs), session.EstimateTokens(msgs))
 		case errors.Is(err, agent.ErrSessionNotFound):
 			fmt.Fprintf(os.Stderr, "session: new %s\n", *sessName)
 		default:
@@ -380,6 +399,23 @@ func run() error {
 		ui.AfterRun = func(runErr error) {
 			if err := store.Save(ctx, active, ag.Messages); err != nil {
 				fmt.Fprintf(os.Stderr, "session: save: %v\n", err)
+				return
+			}
+			if !compressEnabled {
+				return
+			}
+			if !session.ShouldCompress(ag.Messages, compressCfg) {
+				return
+			}
+			newName, newMsgs, ok, err := session.MaybeCompress(ctx, store, active, ag.Messages, compressCfg)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "session compress failed: %v\n", err)
+				return
+			}
+			if ok {
+				fmt.Fprintf(os.Stderr, "session compressed: %s -> %s (kept %d recent, total %d -> %d)\n", active, newName, compressCfg.KeepRecent, len(ag.Messages), len(newMsgs))
+				active = newName
+				ag.Messages = newMsgs
 			}
 		}
 		ui.NewSession = func() string {
