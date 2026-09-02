@@ -2,6 +2,7 @@ package permission
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/holihur/agent/internal/agent"
 )
@@ -35,7 +36,6 @@ func wildcardMatch(pattern, s string) bool {
 }
 
 // MatchRule 判断单条规则是否匹配本次工具调用。
-// Pattern 为空视为 *，InputPattern 为空视为忽略输入。
 func MatchRule(r Rule, call agent.ToolCall) bool {
 	pat := r.Pattern
 	if pat == "" {
@@ -46,25 +46,91 @@ func MatchRule(r Rule, call agent.ToolCall) bool {
 	}
 	if r.InputPattern != "" {
 		inputStr := string(call.Input)
-		// 空输入视作 {}，仍需匹配
 		if len(call.Input) == 0 {
 			inputStr = ""
 		}
 		if !wildcardMatch(r.InputPattern, inputStr) {
-			// 再尝试对格式化后的 JSON 做宽松匹配（去空格后）
-			// 兼容 {"path":"/tmp/a"} 与 {"path": "/tmp/a"} 差异
 			var m map[string]any
 			if json.Unmarshal(call.Input, &m) == nil {
 				if b, err := json.Marshal(m); err == nil {
 					if wildcardMatch(r.InputPattern, string(b)) {
+						if isShell(call.Name) {
+							if !shellInputAllowsRisky(r.InputPattern, call.Input) {
+								return false
+							}
+						}
 						return true
 					}
 				}
 			}
 			return false
 		}
+		if isShell(call.Name) {
+			if !shellInputAllowsRisky(r.InputPattern, call.Input) {
+				return false
+			}
+		}
+		return true
 	}
 	return true
+}
+
+func isShell(name string) bool { return name == "shell" || name == "local__shell" }
+
+func hasRiskyShellInput(input json.RawMessage) bool {
+	cmd := extractCommand(input)
+	if cmd == "" {
+		return false
+	}
+	return HasRiskyShellConstruct(cmd)
+}
+
+func shellInputAllowsRisky(inputPattern string, input json.RawMessage) bool {
+	cmd := extractCommand(input)
+	if cmd == "" {
+		return true
+	}
+	if !HasRiskyShellConstruct(cmd) {
+		return true
+	}
+	if HasPipeline(cmd) {
+		if !contains(inputPattern, "|") {
+			return false
+		}
+	}
+	// 通用风险：串联、后台、子 shell、命令替换等需显式含 ; & $ 或 `
+	if HasRiskyShellConstruct(cmd) {
+		if !containsAny(inputPattern, []string{"|", ";", "&", "$", "`", "&&", "||"}) {
+			return false
+		}
+	}
+	return true
+}
+
+func contains(s, sub string) bool { return len(sub) > 0 && strings.Contains(s, sub) }
+func containsAny(s string, subs []string) bool {
+	for _, sub := range subs {
+		if contains(s, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+func extractCommand(input json.RawMessage) string {
+	if len(input) == 0 {
+		return ""
+	}
+	var m map[string]any
+	if err := json.Unmarshal(input, &m); err != nil {
+		return string(input)
+	}
+	if v, ok := m["command"]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return string(input)
 }
 
 // IsAllowed 检查调用是否被任一 allow 规则命中。
