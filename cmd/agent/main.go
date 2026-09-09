@@ -18,6 +18,8 @@
 //	agent -shell-escape off                      # 禁用 REPL "!" shell 逃逸(仅用户手动触发,与 -shell 互不影响)
 //	agent -slashcmd off                             # 禁用 REPL "/" 命令(/help 打印帮助文档,与 -shell 互不影响)
 //	agent -pprof localhost:6060                  # 开启 pprof 诊断端点(on = localhost:6060;默认关闭)
+//	agent -addr 0.0.0.0:8788                     # 作为 MCP Streamable HTTP 服务器常驻(供其他 agent 调用)
+//	agent -addr 0.0.0.0:8788 -mdns -name work    # 同上,并经 mDNS 广播(_agent-mcp._tcp)供局域网发现
 //	agent -sessions                              # 列出已保存会话(cwd 下 .agent/sessions)
 //	agent -version                               # 打印版本号后退出
 //	agent -update                                # 自我升级:下载最新 release 替换当前二进制
@@ -57,7 +59,9 @@ import (
 	"github.com/holihur/agent/internal/hook"
 	"github.com/holihur/agent/internal/hook/slashcmd"
 	"github.com/holihur/agent/internal/llm"
+	"github.com/holihur/agent/internal/daemon"
 	"github.com/holihur/agent/internal/mcp"
+	"github.com/holihur/agent/internal/mcpserver"
 	"github.com/holihur/agent/internal/mdns"
 	"github.com/holihur/agent/internal/selfupdate"
 	"github.com/holihur/agent/internal/session"
@@ -86,10 +90,17 @@ var serverNameRe = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 var version = "dev"
 
 // defaultSystem 是嵌入式默认系统提示词:随二进制编译进程序(见 system_prompt.md),
+// 并追加 gen-usage 从 `agent -h` 生成的 CLI 用法(见 usage.md,经 //go:generate 同步),
 // 无需随可执行文件分发额外资源;可用 -system 覆盖。
 //
+//go:generate go run ../gen-usage -out usage.md
 //go:embed system_prompt.md
-var defaultSystem string
+var baseSystem string
+
+//go:embed usage.md
+var usageDoc string
+
+var defaultSystem = baseSystem + "\n" + usageDoc
 
 // mcpFlags 支持可重复的 -mcp <name>=<command> [args...]。
 type mcpFlags []mcpServer
@@ -276,6 +287,30 @@ func main() {
 }
 
 func run() error {
+	// workspace:-C 先切换工作目录,后续一切(session/.env/mcp.json/skills/
+	// agent.json/daemon pidfile 与 log)都以该目录为根,实现按 workspace 隔离。
+	ws, err := parseWorkspaceFlag(os.Args[1:])
+	if err != nil {
+		return fail(exitUsage, err)
+	}
+	if ws != "" {
+		abs, err := filepath.Abs(ws)
+		if err != nil {
+			return fail(exitUsage, err)
+		}
+		ws = abs
+		info, err := os.Stat(ws)
+		switch {
+		case err != nil:
+			return fail(exitUsage, fmt.Errorf("-C %s: %w", ws, err))
+		case !info.IsDir():
+			return fail(exitUsage, fmt.Errorf("-C %s: not a directory", ws))
+		}
+		if err := os.Chdir(ws); err != nil {
+			return fail(exitUsage, err)
+		}
+	}
+
 	// agent.json:cwd 下配置文件,值作为 flag 默认值(flag 始终可覆盖);
 	// 放在 flag 定义前,使默认值即配置值。
 	cfg, err := loadAppConfig("agent.json")
@@ -303,6 +338,13 @@ func run() error {
 		compressKeep  = flag.Int("compress-keep", intOr(cfg.CompressKeep, 6), "recent messages to keep after compress")
 		showVersion   = flag.Bool("version", false, "print version and exit (main)")
 		doUpdate      = flag.Bool("update", false, "self-update: download latest release and replace this binary (main)")
+		addr          = flag.String("addr", "", "serve MCP Streamable HTTP on this address (e.g. 0.0.0.0:8788) instead of REPL; tools: agent_run(text, session?), agent_sessions()")
+		mdnsOn        = flag.Bool("mdns", false, "announce this agent via mDNS (_agent-mcp._tcp) for discovery (requires -addr or -daemon)")
+		mdnsName      = flag.String("name", "agent-mcp", "mDNS instance name (requires -mdns)")
+		callTimeout   = flag.Duration("timeout", 10*time.Minute, "per-call timeout for -addr/-daemon server mode")
+		daemonStart   = flag.Bool("daemon", false, "start the MCP server (-addr, default 127.0.0.1:8788) in the background and exit; logs to .agent/agent-mcp.log")
+		daemonStop    = flag.Bool("daemon-stop", false, "stop the background daemon started with -daemon")
+		_             = flag.String("C", "", "workspace root: run everything under this directory (applied before flag defaults; see pre-scan)")
 	)
 	flag.Var(&servers, "mcp", "MCP stdio server, repeatable: <name>=<command> [args...]")
 	if err := flag.CommandLine.Parse(os.Args[1:]); err != nil {
@@ -344,6 +386,54 @@ func run() error {
 	}
 
 	utils.LoadDotEnv(".env")
+
+	// 守护进程:-daemon 后台启动 MCP 服务器(分离进程 + pidfile);-daemon-stop 结束之。
+	// .env 已加载但不会传给后台进程(其启动后自行读取 cwd 下的 .env)。
+	if *daemonStop {
+		stopped, err := daemon.Stop()
+		if err != nil {
+			return err
+		}
+		if !stopped {
+			fmt.Println("daemon: not running")
+			return nil
+		}
+		fmt.Println("daemon: stopped")
+		return nil
+	}
+	if *daemonStart {
+		srvAddr := *addr
+		if srvAddr == "" {
+			srvAddr = "127.0.0.1:8788"
+		}
+		args := []string{"-addr", srvAddr, "-timeout", callTimeout.String()}
+		if ws != "" {
+			args = append(args, "-C", ws)
+		}
+		if *mdnsOn {
+			args = append(args, "-mdns", "-name", *mdnsName)
+		}
+		started, err := daemon.Start(args...)
+		if err != nil {
+			return err
+		}
+		if !started {
+			fmt.Println("daemon: already running")
+			return nil
+		}
+		fmt.Printf("daemon: started (addr %s, pid in %s, log at %s)\n", srvAddr, daemon.PidFile(), daemon.LogFile())
+		return nil
+	}
+
+	// 服务器模式:-addr 时把 agent 暴露为 MCP Streamable HTTP 服务器常驻,
+	// Agent 实例按 session 惰性构造(凭据走 env/.env),故置于凭据校验之前。
+	if *addr != "" {
+		name := ""
+		if *mdnsOn {
+			name = *mdnsName
+		}
+		return mcpserver.Run(*addr, *callTimeout, name)
+	}
 
 	// 会话存储:-sessions 是纯存储操作,置于凭据校验之前(无凭据也可列出)。
 	store := session.NewFileStore(".agent/sessions")
@@ -599,4 +689,33 @@ func envFirst(names ...string) string {
 		}
 	}
 	return ""
+}
+
+// parseWorkspaceFlag 预扫参数取 -C <dir> / --C <dir> / -C=<dir>(与其他 flag 的
+// 顺序无关;需在任何路径相关初始化之前 chdir,故不走常规 flag 定义)。
+func parseWorkspaceFlag(args []string) (string, error) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			break
+		}
+		var v string
+		switch {
+		case a == "-C" || a == "--C":
+			if i+1 >= len(args) {
+				return "", fmt.Errorf("-C requires a directory argument")
+			}
+			v = args[i+1]
+			i++
+		case strings.HasPrefix(a, "-C=") || strings.HasPrefix(a, "--C="):
+			v = strings.TrimPrefix(strings.TrimPrefix(a, "-C="), "--C=")
+		default:
+			continue
+		}
+		if v == "" {
+			return "", fmt.Errorf("-C: empty directory")
+		}
+		return v, nil
+	}
+	return "", nil
 }
