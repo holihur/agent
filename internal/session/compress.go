@@ -3,13 +3,40 @@ package session
 import (
 	"context"
 	"crypto/rand"
+	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
+	"text/template"
 
 	"github.com/holihur/agent/internal/agent"
 )
+
+// compressTemplateFS 内嵌压缩 prompt 的 markdown 模板:prompts 是可审计、
+// 可独立调优的文本资产而非散落的字符串拼接。
+//
+//go:embed compress_prompt.md
+var compressTemplateFS embed.FS
+
+// compressTemplate 是解析后的默认模板(包级一次,失败属程序员错误,panic 合理)。
+var compressTemplate = template.Must(template.New("compress").Parse(
+	mustRead(compressTemplateFS, "compress_prompt.md")))
+
+// mustRead 从 embed FS 读文件;仅包初始化期调用。
+func mustRead(fsys embed.FS, name string) string {
+	raw, err := fsys.ReadFile(name)
+	if err != nil {
+		panic("session compress: embedded template " + name + ": " + err.Error())
+	}
+	return string(raw)
+}
+
+// transcriptEntry 是模板渲染的一行对话记录。
+type transcriptEntry struct {
+	Role string
+	Text string
+}
 
 // Compressor 是会话压缩算法的接口，便于切换不同实现。
 type Compressor interface {
@@ -18,8 +45,11 @@ type Compressor interface {
 }
 
 // LLMCompressor 通过 LLM 总结历史，需外部注入 SummarizeFn。
+// Template 为空时用内嵌的 compress_prompt.md;非空时须是 text/template,
+// 以 transcriptEntry 切片({{.Role}}/{{.Text}})为数据。
 type LLMCompressor struct {
 	Summarize func(ctx context.Context, prompt string) (string, error)
+	Template  string // 空 → 内嵌默认模板
 }
 
 func (c LLMCompressor) Name() string { return "llm" }
@@ -28,23 +58,34 @@ func (c LLMCompressor) Compress(ctx context.Context, msgs []agent.Message) (stri
 	if c.Summarize == nil {
 		return "", fmt.Errorf("session compress: LLMCompressor Summarize is nil")
 	}
-	var b strings.Builder
-	b.WriteString("Summarize the following conversation history concisely, preserving key decisions, tool results, and user intent:\n\n")
+	tpl := compressTemplate
+	if c.Template != "" {
+		parsed, err := template.New("compress").Parse(c.Template)
+		if err != nil {
+			return "", fmt.Errorf("session compress: parse template: %w", err)
+		}
+		tpl = parsed
+	}
+	var entries []transcriptEntry
 	for _, m := range msgs {
 		txt := messagePreview(m)
 		if txt == "" {
 			continue
 		}
-		fmt.Fprintf(&b, "%s: %s\n", m.Role, txt)
+		entries = append(entries, transcriptEntry{Role: string(m.Role), Text: txt})
+	}
+	var b strings.Builder
+	if err := tpl.Execute(&b, entries); err != nil {
+		return "", fmt.Errorf("session compress: render template: %w", err)
 	}
 	return c.Summarize(ctx, b.String())
 }
 
 // Config 是压缩触发的配置。
 type Config struct {
-	MaxTokens  int       // 阈值，如 100000
-	Ratio      float64   // 触发比例，如 0.8 表示 80%
-	KeepRecent int       // 压缩后保留的最近消息数（轮次*2），如 6 表示最后 3 轮
+	MaxTokens  int     // 阈值，如 100000
+	Ratio      float64 // 触发比例，如 0.8 表示 80%
+	KeepRecent int     // 压缩后保留的最近消息数（轮次*2），如 6 表示最后 3 轮
 	Compressor Compressor
 }
 
