@@ -19,9 +19,16 @@
 //	agent -slashcmd off                             # 禁用 REPL "/" 命令(/help 打印帮助文档,与 -shell 互不影响)
 //	agent -pprof localhost:6060                  # 开启 pprof 诊断端点(on = localhost:6060;默认关闭)
 //	agent -sessions                              # 列出已保存会话(cwd 下 .agent/sessions)
+//	agent -version                               # 打印版本号后退出
+//	agent -update                                # 自我升级:下载最新 release 替换当前二进制
 //	agent -session work                          # 续接会话 work(不存在则新建),每轮自动保存
 //	agent -temperature 0.2                       # 采样温度(<0 = 端点默认)
 //	agent -reasoning-effort high                 # 推理力度透传(空 = 端点默认)
+//	agent init                                   # 交互式生成 cwd 下 .env(已存在则拒绝)
+//	agent -q                                     # 无参数 + 管道 stdin 时读入整段输入当一次提问(echo hi | agent)
+//
+// agent.json(cwd 下,可选):provider/model/max_tokens/max_turns/temperature/
+// reasoning_effort/session/session_compress/compress_* 等字段作为 flag 默认值,flag 始终可覆盖。
 //
 // MCP 服务器来源(可叠加,规范 docs/mcp.json.spec.md):
 //   - 文件:cwd 下 mcp.json(或 .mcp.json)的 mcpServers 对象(command=stdio / url=http)
@@ -52,10 +59,13 @@ import (
 	"github.com/holihur/agent/internal/llm"
 	"github.com/holihur/agent/internal/mcp"
 	"github.com/holihur/agent/internal/mdns"
+	"github.com/holihur/agent/internal/selfupdate"
 	"github.com/holihur/agent/internal/session"
 	"github.com/holihur/agent/internal/tools"
 	uicli "github.com/holihur/agent/internal/ui/cli"
 	"github.com/holihur/agent/internal/utils"
+
+	"golang.org/x/term"
 
 	// 钩子功能包:各自在 init 中向 hook 注册(新增功能 = 新增子目录 + 此处一行)。
 	_ "github.com/holihur/agent/internal/hook/agentsmd"
@@ -71,6 +81,9 @@ import (
 
 // serverNameRe 与 tools 层命名空间校验保持一致(提前拦截,报错更友好)。
 var serverNameRe = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+// version 由 GoReleaser ldflags 注入(见 .goreleaser.yml);本地构建默认 "dev"。
+var version = "dev"
 
 // defaultSystem 是嵌入式默认系统提示词:随二进制编译进程序(见 system_prompt.md),
 // 无需随可执行文件分发额外资源;可用 -system 覆盖。
@@ -217,45 +230,117 @@ func buildMCPProviders(ctx context.Context, specs []serverSpec, warnW io.Writer,
 	return providers, nil
 }
 
+// 退出码:0 成功;1 运行/未知错误;2 用法错误(flag、agent.json、参数校验);
+// 3 凭据/配置缺失;4 MCP/上游连接失败。调用方(脚本、CI)可据此分类处理。
+const (
+	exitOK      = 0
+	exitGeneric = 1
+	exitUsage   = 2
+	exitConfig  = 3
+	exitConn    = 4
+)
+
+// exitError 携带进程退出码的错误;main 据此设置 os.Exit 码。
+type exitError struct {
+	code int
+	err  error
+}
+
+func (e *exitError) Error() string { return e.err.Error() }
+func (e *exitError) Unwrap() error { return e.err }
+
+// failf 构造带退出码的错误(fmt.Errorf 语义)。
+func failf(code int, format string, args ...any) error {
+	return &exitError{code: code, err: fmt.Errorf(format, args...)}
+}
+
+// fail 包装已有错误并赋予退出码(err 为 nil 时返回 nil,便于直接 return fail(...)。
+// 注意:此处仅用于非 nil 错误,见各调用点)。
+func fail(code int, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &exitError{code: code, err: err}
+}
+
 func main() {
 	if err := run(); err != nil {
+		code := exitGeneric
+		var ee *exitError
+		if errors.As(err, &ee) {
+			code = ee.code
+		}
 		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(1)
+		os.Exit(code)
 	}
 }
 
 func run() error {
+	// agent.json:cwd 下配置文件,值作为 flag 默认值(flag 始终可覆盖);
+	// 放在 flag 定义前,使默认值即配置值。
+	cfg, err := loadAppConfig("agent.json")
+	if err != nil {
+		return fail(exitUsage, err)
+	}
+
 	var (
 		servers       mcpFlags
-		quick         = flag.String("q", "", "one-shot question (default: interactive REPL)")
+		quick         = flag.String("q", "", "one-shot question (default: interactive REPL; with piped stdin, reads the question from stdin)")
 		system        = flag.String("system", defaultSystem, "system prompt")
-		provider      = flag.String("provider", "", "env prefix: NAME reads NAME_API_KEY/NAME_APIKEY, NAME_BASE_URL, NAME_MODEL")
-		model         = flag.String("model", "", "model override (default: LLM_MODEL or NAME_MODEL)")
-		maxToks       = flag.Int("max-tokens", 1024, "max_tokens per LLM turn")
-		maxTurns      = flag.Int("max-turns", 60, "max think-act-observe turns per question (<=0 = default 60)")
-		temp          = flag.Float64("temperature", -1, "sampling temperature; <0 = endpoint default (main)")
-		effort        = flag.String("reasoning-effort", "", "reasoning effort passed through, e.g. low/medium/high; empty = endpoint default (main)")
+		provider      = flag.String("provider", stringOr(cfg.Provider, ""), "env prefix: NAME reads NAME_API_KEY/NAME_APIKEY, NAME_BASE_URL, NAME_MODEL")
+		model         = flag.String("model", stringOr(cfg.Model, ""), "model override (default: LLM_MODEL or NAME_MODEL)")
+		maxToks       = flag.Int("max-tokens", intOr(cfg.MaxTokens, 1024), "max_tokens per LLM turn")
+		maxTurns      = flag.Int("max-turns", intOr(cfg.MaxTurns, 60), "max think-act-observe turns per question (<=0 = default 60)")
+		temp          = flag.Float64("temperature", floatOr(cfg.Temperature, -1), "sampling temperature; <0 = endpoint default (main)")
+		effort        = flag.String("reasoning-effort", stringOr(cfg.ReasoningEffort, ""), "reasoning effort passed through, e.g. low/medium/high; empty = endpoint default (main)")
 		shell         = flag.String("shell", "on", "builtin shell tool; off/none disables (main)")
 		fs            = flag.String("fs", "on", "builtin file tools read/write/edit; off/none disables (main)")
-		sessName      = flag.String("session", "", "persistent session name: resume if exists, autosave each turn (main)")
+		sessName      = flag.String("session", stringOr(cfg.Session, ""), "persistent session name: resume if exists, autosave each turn (main)")
 		sessList      = flag.Bool("sessions", false, "list saved sessions and exit (main)")
-		compressMode  = flag.String("session-compress", "auto", "session compress: auto/on/off (auto triggers at threshold)")
-		compressMax   = flag.Int("compress-max-tokens", 100000, "session compress max tokens (e.g. 100000)")
-		compressRatio = flag.Float64("compress-ratio", 0.8, "session compress trigger ratio 0-1 (e.g. 0.8 means 80%)")
-		compressKeep  = flag.Int("compress-keep", 6, "recent messages to keep after compress")
+		compressMode  = flag.String("session-compress", stringOr(cfg.SessionCompress, "auto"), "session compress: auto/on/off (auto triggers at threshold)")
+		compressMax   = flag.Int("compress-max-tokens", intOr(cfg.CompressMaxToks, 100000), "session compress max tokens (e.g. 100000)")
+		compressRatio = flag.Float64("compress-ratio", floatOr(cfg.CompressRatio, 0.8), "session compress trigger ratio 0-1 (e.g. 0.8 means 80%)")
+		compressKeep  = flag.Int("compress-keep", intOr(cfg.CompressKeep, 6), "recent messages to keep after compress")
+		showVersion   = flag.Bool("version", false, "print version and exit (main)")
+		doUpdate      = flag.Bool("update", false, "self-update: download latest release and replace this binary (main)")
 	)
 	flag.Var(&servers, "mcp", "MCP stdio server, repeatable: <name>=<command> [args...]")
-	flag.Parse()
+	if err := flag.CommandLine.Parse(os.Args[1:]); err != nil {
+		return fail(exitUsage, err)
+	}
+
+	if flag.Arg(0) == "init" {
+		return runInit(".", os.Stdin, os.Stdout)
+	}
+
+	if *showVersion {
+		fmt.Printf("agent %s\n", version)
+		return nil
+	}
+	if *doUpdate {
+		res, err := selfupdate.Run(context.Background(), selfupdate.Options{
+			Version:  version,
+			Progress: func(msg string) { fmt.Fprintln(os.Stdout, msg) },
+		})
+		if err != nil {
+			return err
+		}
+		if !res.Updated {
+			return nil
+		}
+		fmt.Println("re-run `agent -version` to confirm")
+		return nil
+	}
 
 	switch *shell {
 	case "", "on", "off", "none":
 	default:
-		return fmt.Errorf("-shell must be on or off/none, got %q", *shell)
+		return failf(exitUsage, "-shell must be on or off/none, got %q", *shell)
 	}
 	switch *fs {
 	case "", "on", "off", "none":
 	default:
-		return fmt.Errorf("-fs must be on or off/none, got %q", *fs)
+		return failf(exitUsage, "-fs must be on or off/none, got %q", *fs)
 	}
 
 	utils.LoadDotEnv(".env")
@@ -296,13 +381,15 @@ func run() error {
 		llmModel = *model
 	}
 	if apiKey == "" {
-		return fmt.Errorf("no API key: set LLM_API_KEY (or NAME_API_KEY/NAME_APIKEY with -provider) in env or .env")
+		return failf(exitConfig, "no API key: set LLM_API_KEY in env or .env (with -provider NAME set NAME_API_KEY instead)\n"+
+			"  quick start: run `agent init` to create .env interactively, or:\n"+
+			"  export LLM_API_KEY=sk-... LLM_BASE_URL=https://your-endpoint LLM_MODEL=your-model")
 	}
 	if baseURL == "" {
-		return fmt.Errorf("no base URL: set LLM_BASE_URL (an Anthropic-compatible endpoint)")
+		return failf(exitConfig, "no base URL: set LLM_BASE_URL (an Anthropic-compatible endpoint), e.g. export LLM_BASE_URL=https://api.example.com")
 	}
 	if llmModel == "" {
-		return fmt.Errorf("no model: set LLM_MODEL (or NAME_MODEL with -provider)")
+		return failf(exitConfig, "no model: set LLM_MODEL (or NAME_MODEL with -provider), e.g. export LLM_MODEL=claude-sonnet-4-5")
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -317,6 +404,11 @@ func run() error {
 	// builtin 同时充当 hook 的进程内工具平面(如 skills 注册 skill 工具),
 	// -shell/-fs off 时保留空平面,只不注册对应工具。
 	builtin := tools.NewLocal()
+	// exit 工具:LLM 可主动请求优雅退出(置位后 REPL 当前轮收尾即结束,退出码 0)。
+	exitFlag := &tools.ExitFlag{}
+	if err := tools.RegisterExit(builtin, exitFlag); err != nil {
+		return err
+	}
 	if *shell != "off" && *shell != "none" {
 		if err := tools.RegisterShell(builtin); err != nil {
 			return err
@@ -333,6 +425,7 @@ func run() error {
 
 	ui := uicli.New(os.Stdin, os.Stdout)
 	ui.CWD = cwd
+	ui.ExitRequested = exitFlag.Requested
 
 	// 生命周期钩子:每个 hook 是 internal/hook/ 下一个子包,init 自注册,
 	// 上方 blank-import 激活;这里只统一装配 InstallAll。
@@ -349,13 +442,13 @@ func run() error {
 		filepath.Join(cwd, ".mcp.json"),
 	)
 	if err != nil {
-		return err
+		return fail(exitUsage, err)
 	}
 	// MCP 服务器:mcp.json 文件条目与 -mcp flag 合并(规范 §mcp.json/merge)。
 	// 启动预检分流(规范 §mcp.json/remote):远程失败 → 警告并跳过;stdio 失败 → fail-fast。
 	mcpProviders, err := buildMCPProviders(ctx, mergeMCPServers(fromFile, servers), os.Stderr, ui)
 	if err != nil {
-		return err
+		return fail(exitConn, err)
 	}
 	defer func() {
 		for _, p := range mcpProviders {
@@ -419,7 +512,7 @@ func run() error {
 	compressEnabled := *compressMode != "off" && *compressMode != "none"
 	if compressEnabled {
 		if err := compressCfg.Validate(); err != nil {
-			return fmt.Errorf("compress config: %w", err)
+			return fail(exitUsage, fmt.Errorf("compress config: %w", err))
 		}
 	}
 
@@ -482,6 +575,19 @@ func run() error {
 
 	if *quick != "" {
 		return ui.RunOnce(ctx, *quick)
+	}
+	// 管道输入:非终端 stdin(如 echo hi | agent)把 stdin 全文当一次提问,
+	// 空输入则显式报错,避免静默落到 REPL。
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		piped, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return fmt.Errorf("read stdin: %w", err)
+		}
+		question := strings.TrimSpace(string(piped))
+		if question == "" {
+			return fmt.Errorf("empty stdin: pipe a question, e.g. echo 'summarize this repo' | agent")
+		}
+		return ui.RunOnce(ctx, question)
 	}
 	return ui.Run(ctx)
 }

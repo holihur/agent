@@ -54,14 +54,19 @@ type UI struct {
 	// (如会话自动保存);成功时实参为 nil。
 	AfterRun func(runErr error)
 
+	// ExitRequested 非 nil 时,每轮问答结束后询问模型是否已请求退出
+	// (内置 exit 工具置位);返回 true 则 REPL 优雅结束(退出码 0),
+	// 会话保存等 AfterRun 收尾已先行完成。
+	ExitRequested func() bool
+
 	// CWD 是项目根，用于权限持久化路径解析；由 cmd 注入。
 	CWD string
 
-	in       io.Reader
-	out      io.Writer
-	rl       *readline.Instance // TTY 会话;nil = 逐行兜底
-	scanner  *bufio.Scanner
-	streamed    bool           // 本轮已流式输出(收尾不重复打印答案)
+	in          io.Reader
+	out         io.Writer
+	rl          *readline.Instance // TTY 会话;nil = 逐行兜底
+	scanner     *bufio.Scanner
+	streamed    bool            // 本轮已流式输出(收尾不重复打印答案)
 	streamedBuf strings.Builder // 累积流式增量，用于 streamed 为 true 但增量为空时的回退
 
 	mu      sync.Mutex
@@ -240,7 +245,11 @@ func (u *UI) readlineLoop(ctx context.Context) error {
 				continue
 			}
 			u.write(fmt.Sprintf("error: %v\n", err))
-			continue
+		}
+		// 模型经 exit 工具请求退出:当前轮(含会话保存)已收尾,优雅结束 REPL。
+		if u.ExitRequested != nil && u.ExitRequested() {
+			u.write("session: exit requested by agent\n")
+			return nil
 		}
 	}
 }

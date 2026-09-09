@@ -19,6 +19,33 @@ curl -fsSL https://raw.githubusercontent.com/holihur/agent/main/install.sh | sh
 go install github.com/holihur/agent/cmd/agent@latest
 ```
 
+## 首次上手
+
+```bash
+agent init   # 交互式询问 LLM_BASE_URL / LLM_API_KEY / LLM_MODEL,写入 cwd 下 .env
+agent        # 直接开始
+```
+
+不设凭据直接启动时,报错会给出具体的下一步(设环境变量示例或 `agent init`)。
+
+### 配置文件
+
+cwd 下可选 `agent.json` 作为 flag 默认值(命令行 flag 始终可覆盖):
+
+```json
+{
+  "provider": "",
+  "model": "claude-sonnet-4-5",
+  "max_tokens": 4096,
+  "max_turns": 60,
+  "temperature": 0.2,
+  "session": "work",
+  "session_compress": "auto"
+}
+```
+
+支持字段:`provider`、`model`、`max_tokens`、`max_turns`、`temperature`、`reasoning_effort`、`session`、`session_compress`、`compress_max_tokens`、`compress_ratio`、`compress_keep`。
+
 ## MCP 接入
 
 ```bash
@@ -30,6 +57,23 @@ agent -mcp "remote=https://mcp.example.com/mcp"
 ```
 
 完整示例(stdio 与 Streamable HTTP 两种传输)见 [examples](examples/README.md)。
+
+## 自我更新
+
+```bash
+agent -version   # 打印版本号(GoReleaser 构建时经 ldflags 注入)
+agent -update    # 检查 GitHub 最新 release,下载归档、校验 sha256 后原子替换当前二进制
+```
+
+本地构建(`dev` 版本)总是升级到最新;已是最新版本时什么都不做。目标目录不可写时兜底安装到 `~/.local/bin/agent`。
+
+## 快速开始
+
+```bash
+echo "3+5 等于几" | agent      # 管道输入,一次性问答
+agent -q "今天星期几"          # -q 一次性问答
+agent                          # 交互 REPL
+```
 
 ## 会话持久化
 
@@ -109,3 +153,9 @@ agent -fs off           # 禁用内置文件工具 read/write/edit:模型不再�
 ```
 
 未知命令给出 `unknown command` 提示并指向 `/help`。`agent -slashcmd off` 可整体禁用 `/` 命令。
+
+## 模型主动退出
+
+内置 `exit` 工具暴露给 LLM:模型判断任务完成(或无法继续)时可调用它主动结束会话。
+调用后当前轮正常收尾(含会话自动保存),REPL 打印 `session: exit requested by agent`
+后以退出码 0 优雅退出,等效于用户输入 `/exit`。
