@@ -15,10 +15,13 @@ import (
 	"maps"
 	"os"
 	"slices"
+	"strings"
+	"time"
 
 	core "github.com/holihur/agent/internal/agent"
 	"github.com/holihur/agent/internal/llm"
 	"github.com/holihur/agent/internal/mcp"
+	"github.com/holihur/agent/internal/mdns"
 	"github.com/holihur/agent/internal/session"
 	"github.com/holihur/agent/internal/tools"
 )
@@ -130,6 +133,8 @@ func (a *Agent) Tool(name, description string, schema map[string]any, fn ToolFun
 }
 
 // MCP 挂载一个 MCP 服务器并做连接预检:stdio 启动失败或远程不可达均 fail-fast。
+// URL 支持 mdns: 协议做局域网发现:mdns:<实例名>(空实例名 = 首个 _agent-mcp._tcp),
+// 经 internal/mdns.Resolve 解析为 http://IP:Port+path 后按远程 HTTP 挂载。
 // 工具追问(MRTR)默认一律拒绝;需要交互的宿主未来经 Responder 注入。
 func (a *Agent) MCP(spec MCPSpec) error {
 	if spec.Name == "" {
@@ -137,6 +142,13 @@ func (a *Agent) MCP(spec MCPSpec) error {
 	}
 	var p *mcp.Provider
 	switch {
+	case strings.HasPrefix(spec.URL, "mdns:"):
+		instance := strings.TrimPrefix(spec.URL, "mdns:")
+		url, err := mdns.ResolveURL(context.Background(), instance, 3*time.Second)
+		if err != nil {
+			return fmt.Errorf("agent: mcp %q discover: %w", spec.Name, err)
+		}
+		p = mcp.NewHTTP(spec.Name, mcp.HTTPConfig{URL: url, Headers: spec.Headers}, noopResponder{})
 	case spec.URL != "":
 		p = mcp.NewHTTP(spec.Name, mcp.HTTPConfig{URL: spec.URL, Headers: spec.Headers}, noopResponder{})
 	default:

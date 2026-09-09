@@ -42,12 +42,16 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
+
+	_ "embed"
 
 	"github.com/holihur/agent/internal/agent"
 	"github.com/holihur/agent/internal/hook"
 	"github.com/holihur/agent/internal/hook/slashcmd"
 	"github.com/holihur/agent/internal/llm"
 	"github.com/holihur/agent/internal/mcp"
+	"github.com/holihur/agent/internal/mdns"
 	"github.com/holihur/agent/internal/session"
 	"github.com/holihur/agent/internal/tools"
 	uicli "github.com/holihur/agent/internal/ui/cli"
@@ -68,16 +72,21 @@ import (
 // serverNameRe 与 tools 层命名空间校验保持一致(提前拦截,报错更友好)。
 var serverNameRe = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
-const defaultSystem = "You are a helpful assistant. Use the available tools when they help answer the question."
+// defaultSystem 是嵌入式默认系统提示词:随二进制编译进程序(见 system_prompt.md),
+// 无需随可执行文件分发额外资源;可用 -system 覆盖。
+//
+//go:embed system_prompt.md
+var defaultSystem string
 
 // mcpFlags 支持可重复的 -mcp <name>=<command> [args...]。
 type mcpFlags []mcpServer
 
 type mcpServer struct {
-	Name    string
-	Command string
-	Args    []string
-	URL     string // 以 http(s):// 开头时为远程服务器(与 Command 互斥)
+	Name        string
+	Command     string
+	Args        []string
+	URL         string // 以 http(s):// 开头时为远程服务器(与 Command 互斥)
+	ServiceName string // 以 mdns: 开头时为 mDNS 发现的实例名(空 = 首个)(与 Command 互斥)
 }
 
 func (f *mcpFlags) String() string {
@@ -107,6 +116,13 @@ func (f *mcpFlags) Set(v string) error {
 		*f = append(*f, mcpServer{Name: name, URL: fields[0]})
 		return nil
 	}
+	if inst, ok := strings.CutPrefix(fields[0], "mdns:"); ok {
+		if len(fields) > 1 {
+			return fmt.Errorf("-mcp %s: mdns: url takes no args", name)
+		}
+		*f = append(*f, mcpServer{Name: name, ServiceName: inst})
+		return nil
+	}
 	*f = append(*f, mcpServer{Name: name, Command: fields[0], Args: fields[1:]})
 	return nil
 }
@@ -119,12 +135,13 @@ func isHTTPURL(s string) bool {
 // serverSpec 是装配一个 MCP Provider 所需的最终配置。
 // URL 非空 → Streamable HTTP;否则 Command + Args → stdio 子进程。
 type serverSpec struct {
-	Name    string
-	Command string
-	Args    []string
-	Env     []string
-	URL     string
-	Headers map[string]string
+	Name        string
+	Command     string
+	Args        []string
+	Env         []string
+	URL         string
+	Headers     map[string]string
+	ServiceName string // mDNS 发现的实例名(空 = 首个);解析后填入 URL
 }
 
 // mergeMCPServers 合并 mcp.json 条目与 -mcp flag(规范 §mcp.json/merge):
@@ -148,7 +165,7 @@ func mergeMCPServers(fromFile []mcp.JSONServer, fromFlags mcpFlags) []serverSpec
 		})
 	}
 	for _, s := range fromFlags {
-		add(serverSpec{Name: s.Name, Command: s.Command, Args: s.Args, URL: s.URL})
+		add(serverSpec{Name: s.Name, Command: s.Command, Args: s.Args, URL: s.URL, ServiceName: s.ServiceName})
 	}
 	return specs
 }
@@ -172,6 +189,16 @@ func buildMCPProviders(ctx context.Context, specs []serverSpec, warnW io.Writer,
 	var providers []*mcp.Provider
 	for _, s := range specs {
 		var p *mcp.Provider
+		if s.URL == "" && s.ServiceName != "" {
+			// mDNS 发现:实例名解析为 http URL 后按远程 HTTP 挂载;
+			// 发现失败按远程语义警告并跳过。
+			url, err := mdns.ResolveURL(ctx, s.ServiceName, 3*time.Second)
+			if err != nil {
+				fmt.Fprintf(warnW, "mcp: skipping remote server %q: %v\n", s.Name, err)
+				continue
+			}
+			s.URL = url
+		}
 		if s.URL != "" {
 			p = mcp.NewHTTP(s.Name, mcp.HTTPConfig{URL: s.URL, Headers: s.Headers}, responder)
 		} else {

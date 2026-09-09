@@ -10,9 +10,11 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/holihur/agent/internal/agent"
 	"github.com/holihur/agent/internal/hook"
+	"github.com/holihur/agent/internal/mdns"
 	"github.com/holihur/agent/internal/permission"
 	"github.com/holihur/agent/internal/session"
 )
@@ -66,6 +68,7 @@ const helpText = `REPL commands:
   /help, /h        print this help
   /exit, /quit     exit the REPL (bare exit/quit also work)
   /new             start a new session (clears history; with -session rotates to a fresh name, old kept)
+  /agents          list other agents on the LAN (mDNS _agent-mcp._tcp discovery)
   /compact [session] [--keep N]  manually compress session (force, keep last N, default 6) -> s_xid_1
   /allow <pat> [| <inputPat>] [--global]  persist allow rule (wildcard * ?); e.g. /allow fs__* , /allow read | *"/tmp/*"*
   /deny <pat> [| <inputPat>] [--global]   persist deny rule (wildcard * ?)
@@ -105,6 +108,8 @@ func runSlash(input string) (string, bool) {
 	switch trim {
 	case "/help", "/h":
 		return helpText, true
+	case "/agents", "/agents list":
+		return runAgents(), true
 	case "/allow-list", "/perm list", "/perms", "/permissions":
 		return runPermList(), true
 	case "/perm help", "/allow help":
@@ -148,6 +153,24 @@ func runSlash(input string) (string, bool) {
 		}
 	}
 	return fmt.Sprintf("unknown command: %s (try /help)", trim), true
+}
+
+// runAgents 扫描局域网 mDNS(_agent-mcp._tcp),列出可交互的其他 agent;
+// 每行附上可直接使用的接入命令。扫描窗口 2s。
+func runAgents() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	svcs, err := mdns.Resolve(ctx, 2*time.Second, "")
+	if err != nil {
+		return "no other agents discovered on the LAN (_agent-mcp._tcp)"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "discovered %d agent(s) on the LAN:\n", len(svcs))
+	for _, s := range svcs {
+		fmt.Fprintf(&b, "  - %s  http://%s:%d%s\n", s.Instance, s.IP, s.Port, s.Path())
+		fmt.Fprintf(&b, "      connect: -mcp %s=mdns:%s\n", s.Instance, s.Instance)
+	}
+	return b.String()
 }
 
 const permHelpText = `Permission commands:
