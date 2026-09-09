@@ -36,6 +36,13 @@ type SessionStore = core.SessionStore
 // ErrSessionNotFound 表示指定会话不存在(转发核心域哨兵;用 errors.Is 判定)。
 var ErrSessionNotFound = core.ErrSessionNotFound
 
+// ErrMemoryNotFound 表示指定记忆键不存在(转发核心域哨兵;用 errors.Is 判定)。
+var ErrMemoryNotFound = core.ErrMemoryNotFound
+
+// Memory 是长期记忆 port(转发核心域同名接口):
+// 宿主可自定义实现(如向量库),默认用文件存储。
+type Memory = core.Memory
+
 // ToolFunc 是进程内工具的执行函数:入参为模型给出的 JSON 对象,返回回填文本。
 // 返回 error 视为工具失败(转为 is_error 回填,不打断循环)。
 type ToolFunc func(ctx context.Context, input json.RawMessage) (string, error)
@@ -62,6 +69,7 @@ type Config struct {
 	Temperature     *float64     // nil → 不发送(端点默认);指向 0 = 确定性;>1 报错
 	ReasoningEffort string       // 空 → 不发送;常见 low/medium/high,值原样透传
 	Sessions        SessionStore // nil → 默认文件存储(cwd 下 .agent/sessions)
+	Memory          Memory       // nil → 无长期记忆;配置后自动向模型暴露 memory_save/search/forget 工具,并在每轮 system prompt 注入记忆文件树(键以 - 分层)
 }
 
 // Agent 是嵌入式 agent 门面:New 构造,Tool/MCP/Shell 按需挂载,Run 驱动,
@@ -71,6 +79,7 @@ type Agent struct {
 	registry  *tools.Registry
 	local     *tools.LocalProvider
 	sessions  core.SessionStore
+	memory    core.Memory
 	providers []*mcp.Provider // 经 MCP() 挂载的连接;Close 统一释放
 }
 
@@ -113,7 +122,7 @@ func New(cfg ...Config) (*Agent, error) {
 	if sessions == nil {
 		sessions = session.NewFileStore(".agent/sessions")
 	}
-	return &Agent{
+	a := &Agent{
 		inner: &core.Agent{
 			LLM:      client,
 			Registry: registry,
@@ -124,7 +133,140 @@ func New(cfg ...Config) (*Agent, error) {
 		registry: registry,
 		local:    local,
 		sessions: sessions,
-	}, nil
+		memory:   c.Memory,
+	}
+	if c.Memory != nil {
+		if err := a.registerMemoryTools(c.Memory); err != nil {
+			return nil, err
+		}
+		a.registerMemoryPrompt(c.Memory)
+	}
+	return a, nil
+}
+
+// maxMemoryTreeKeys 是注入 system prompt 的记忆键上限:超出截断并注明总数,
+// 保证"简介高速"——记忆列表不随规模膨胀挤占上下文。
+const maxMemoryTreeKeys = 200
+
+// registerMemoryPrompt 注册每轮注入钩子:把当前记忆键渲染为文件树追加到
+// system prompt,让模型无需先调工具即知道有哪些记忆。注入失败静默跳过
+// (钩子无错误通道,记忆列表缺失不致命,模型仍可用 memory_search 探查)。
+func (a *Agent) registerMemoryPrompt(m core.Memory) {
+	a.inner.Hooks.OnMutateTurnRequest(func(r core.TurnRequest) core.TurnRequest {
+		keys, err := m.Keys(context.Background())
+		if err != nil || len(keys) == 0 {
+			return r
+		}
+		tree := memoryFileTree(keys)
+		prompt := "\n\n# Long-term memory index\nMemories are stored as files; the tree below shows what exists (key segments separated by \"-\"). Use the memory tools to read/save/delete individual entries.\n\n" + tree
+		r.System += prompt
+		return r
+	})
+}
+
+// memoryFileTree 把扁平记忆键列表('-' 作层级分隔)渲染为文件树文本。
+// 例:"lang-go" → lang/-go.json 的树形缩进;超过 maxMemoryTreeKeys 截断。
+func memoryFileTree(keys []string) string {
+	var b strings.Builder
+	b.WriteString(".agent/memory/\n")
+	for i, k := range keys {
+		if i >= maxMemoryTreeKeys {
+			fmt.Fprintf(&b, "… (+%d more, %d total)\n", len(keys)-maxMemoryTreeKeys, len(keys))
+			break
+		}
+		depth := strings.Count(k, "-")
+		indent := strings.Repeat("  ", depth)
+		// 末段之外的 '-' 是层级:叶子文件名把最后一段前的 '-' 换成 '/' 展示
+		name := strings.ReplaceAll(k, "-", "/") + ".json"
+		fmt.Fprintf(&b, "%s%s\n", indent, name)
+	}
+	return b.String()
+}
+
+// registerMemoryTools 向模型暴露长期记忆工具(save/search/forget);
+// 宿主读/列走门面方法,不经工具。
+func (a *Agent) registerMemoryTools(m core.Memory) error {
+	saveSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"key":   map[string]any{"type": "string", "description": "记忆键,[a-zA-Z0-9_-],1-64"},
+			"value": map[string]any{"type": "string", "description": "记忆内容,非空"},
+		},
+		"required": []string{"key", "value"},
+	}
+	searchSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"query": map[string]any{"type": "string", "description": "子串查询,空串列出全部键"},
+		},
+		"required": []string{"query"},
+	}
+	forgetSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"key": map[string]any{"type": "string", "description": "要删除的记忆键"},
+		},
+		"required": []string{"key"},
+	}
+	type memInput struct {
+		Key   string `json:"key"`
+		Value string `json:"value"`
+		Query string `json:"query"`
+	}
+	unmarshal := func(input json.RawMessage) (memInput, error) {
+		var in memInput
+		if err := json.Unmarshal(input, &in); err != nil {
+			return in, fmt.Errorf("memory tool: bad input: %w", err)
+		}
+		return in, nil
+	}
+	if err := a.local.Register(tools.ToolDef{
+		Name: "memory_save", Description: "保存一条长期记忆(按 key 覆盖)",
+		InputSchema: saveSchema,
+	}, func(ctx context.Context, raw json.RawMessage) (string, error) {
+		in, err := unmarshal(raw)
+		if err != nil {
+			return "", err
+		}
+		if err := m.Put(ctx, in.Key, in.Value); err != nil {
+			return "", err
+		}
+		return "saved: " + in.Key, nil
+	}); err != nil {
+		return err
+	}
+	if err := a.local.Register(tools.ToolDef{
+		Name: "memory_search", Description: "按子串检索长期记忆键,空查询列出全部键",
+		InputSchema: searchSchema,
+	}, func(ctx context.Context, raw json.RawMessage) (string, error) {
+		in, err := unmarshal(raw)
+		if err != nil {
+			return "", err
+		}
+		keys, err := m.Search(ctx, in.Query)
+		if err != nil {
+			return "", err
+		}
+		if len(keys) == 0 {
+			return "no matches", nil
+		}
+		return strings.Join(keys, "\n"), nil
+	}); err != nil {
+		return err
+	}
+	return a.local.Register(tools.ToolDef{
+		Name: "memory_forget", Description: "删除一条长期记忆",
+		InputSchema: forgetSchema,
+	}, func(ctx context.Context, raw json.RawMessage) (string, error) {
+		in, err := unmarshal(raw)
+		if err != nil {
+			return "", err
+		}
+		if err := m.Delete(ctx, in.Key); err != nil {
+			return "", err
+		}
+		return "deleted: " + in.Key, nil
+	})
 }
 
 // Tool 注册一个进程内函数工具(暴露名不加前缀);重名立即报错。
@@ -247,6 +389,46 @@ func (a *Agent) DeleteSession(name string) error {
 // NewSession 清空当前对话历史,从零开始(已持久化的会话不受影响)。
 func (a *Agent) NewSession() {
 	a.inner.Messages = nil
+}
+
+// Remember 写入/覆盖一条长期记忆;未配置 Memory 时报错。
+func (a *Agent) Remember(ctx context.Context, key, value string) error {
+	if a.memory == nil {
+		return errors.New("agent: memory not configured (set Config.Memory)")
+	}
+	return a.memory.Put(ctx, key, value)
+}
+
+// Recall 读取一条长期记忆;不存在时返回包装的 ErrMemoryNotFound。
+func (a *Agent) Recall(ctx context.Context, key string) (string, error) {
+	if a.memory == nil {
+		return "", errors.New("agent: memory not configured (set Config.Memory)")
+	}
+	return a.memory.Get(ctx, key)
+}
+
+// SearchMemory 按子串检索记忆键(大小写不敏感,键与值均参与匹配)。
+func (a *Agent) SearchMemory(ctx context.Context, query string) ([]string, error) {
+	if a.memory == nil {
+		return nil, errors.New("agent: memory not configured (set Config.Memory)")
+	}
+	return a.memory.Search(ctx, query)
+}
+
+// MemoryKeys 列出全部长期记忆键。
+func (a *Agent) MemoryKeys(ctx context.Context) ([]string, error) {
+	if a.memory == nil {
+		return nil, errors.New("agent: memory not configured (set Config.Memory)")
+	}
+	return a.memory.Keys(ctx)
+}
+
+// Forget 删除一条长期记忆;不存在时返回包装的 ErrMemoryNotFound。
+func (a *Agent) Forget(ctx context.Context, key string) error {
+	if a.memory == nil {
+		return errors.New("agent: memory not configured (set Config.Memory)")
+	}
+	return a.memory.Delete(ctx, key)
 }
 
 // noopResponder 是无宿主交互时的默认追问应答者:一律拒绝(fail-fast 语义)。
