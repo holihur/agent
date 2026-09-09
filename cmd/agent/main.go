@@ -74,6 +74,7 @@ import (
 	// 钩子功能包:各自在 init 中向 hook 注册(新增功能 = 新增子目录 + 此处一行)。
 	_ "github.com/holihur/agent/internal/hook/agentsmd"
 	_ "github.com/holihur/agent/internal/hook/confirm"
+	_ "github.com/holihur/agent/internal/hook/memory"
 	_ "github.com/holihur/agent/internal/hook/perm"
 	_ "github.com/holihur/agent/internal/hook/pprof"
 	_ "github.com/holihur/agent/internal/hook/shell"

@@ -121,6 +121,19 @@ agent -skills .agents/skills  # 默认;可改为其他目录(相对 cwd 或绝�
 agent -skills off             # 禁用
 ```
 
+## 长期记忆
+
+默认启用:cwd 下 `.agent/memory/` 每键一个 JSON 文件。模型可用
+`memory_save` / `memory_search` / `memory_forget` 三个工具读写;每轮
+system prompt 注入记忆键文件树(键以 `-` 分层),模型无需先调工具即知道有哪些记忆。
+
+```bash
+agent -memory off        # 禁用长期记忆
+agent -memory /path/dir  # 改用其他目录(相对 cwd 或绝对路径)
+```
+
+嵌入式用法:构造时传 `Config{Memory: memory.NewFileStore(dir)}`(nil = 不启用)。
+
 ## 内置文件工具
 
 三个内置工具 read / write / edit,均支持批量(一次调用处理多个文件):

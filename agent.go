@@ -20,6 +20,7 @@ import (
 
 	core "github.com/holihur/agent/internal/agent"
 	"github.com/holihur/agent/internal/llm"
+	"github.com/holihur/agent/internal/memory"
 	"github.com/holihur/agent/internal/mcp"
 	"github.com/holihur/agent/internal/mdns"
 	"github.com/holihur/agent/internal/session"
@@ -144,10 +145,6 @@ func New(cfg ...Config) (*Agent, error) {
 	return a, nil
 }
 
-// maxMemoryTreeKeys 是注入 system prompt 的记忆键上限:超出截断并注明总数,
-// 保证"简介高速"——记忆列表不随规模膨胀挤占上下文。
-const maxMemoryTreeKeys = 200
-
 // registerMemoryPrompt 注册每轮注入钩子:把当前记忆键渲染为文件树追加到
 // system prompt,让模型无需先调工具即知道有哪些记忆。注入失败静默跳过
 // (钩子无错误通道,记忆列表缺失不致命,模型仍可用 memory_search 探查)。
@@ -157,116 +154,16 @@ func (a *Agent) registerMemoryPrompt(m core.Memory) {
 		if err != nil || len(keys) == 0 {
 			return r
 		}
-		tree := memoryFileTree(keys)
-		prompt := "\n\n# Long-term memory index\nMemories are stored as files; the tree below shows what exists (key segments separated by \"-\"). Use the memory tools to read/save/delete individual entries.\n\n" + tree
-		r.System += prompt
+		r.System += memory.IndexPrompt(keys)
 		return r
 	})
 }
 
-// memoryFileTree 把扁平记忆键列表('-' 作层级分隔)渲染为文件树文本。
-// 例:"lang-go" → lang/-go.json 的树形缩进;超过 maxMemoryTreeKeys 截断。
-func memoryFileTree(keys []string) string {
-	var b strings.Builder
-	b.WriteString(".agent/memory/\n")
-	for i, k := range keys {
-		if i >= maxMemoryTreeKeys {
-			fmt.Fprintf(&b, "… (+%d more, %d total)\n", len(keys)-maxMemoryTreeKeys, len(keys))
-			break
-		}
-		depth := strings.Count(k, "-")
-		indent := strings.Repeat("  ", depth)
-		// 末段之外的 '-' 是层级:叶子文件名把最后一段前的 '-' 换成 '/' 展示
-		name := strings.ReplaceAll(k, "-", "/") + ".json"
-		fmt.Fprintf(&b, "%s%s\n", indent, name)
-	}
-	return b.String()
-}
-
 // registerMemoryTools 向模型暴露长期记忆工具(save/search/forget);
-// 宿主读/列走门面方法,不经工具。
+// 宿主读/列走门面方法,不经工具。实现委托 internal/memory 共享包,
+// 与 CLI 的 memory hook 用同一份注册逻辑。
 func (a *Agent) registerMemoryTools(m core.Memory) error {
-	saveSchema := map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"key":   map[string]any{"type": "string", "description": "记忆键,[a-zA-Z0-9_-],1-64"},
-			"value": map[string]any{"type": "string", "description": "记忆内容,非空"},
-		},
-		"required": []string{"key", "value"},
-	}
-	searchSchema := map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"query": map[string]any{"type": "string", "description": "子串查询,空串列出全部键"},
-		},
-		"required": []string{"query"},
-	}
-	forgetSchema := map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"key": map[string]any{"type": "string", "description": "要删除的记忆键"},
-		},
-		"required": []string{"key"},
-	}
-	type memInput struct {
-		Key   string `json:"key"`
-		Value string `json:"value"`
-		Query string `json:"query"`
-	}
-	unmarshal := func(input json.RawMessage) (memInput, error) {
-		var in memInput
-		if err := json.Unmarshal(input, &in); err != nil {
-			return in, fmt.Errorf("memory tool: bad input: %w", err)
-		}
-		return in, nil
-	}
-	if err := a.local.Register(tools.ToolDef{
-		Name: "memory_save", Description: "保存一条长期记忆(按 key 覆盖)",
-		InputSchema: saveSchema,
-	}, func(ctx context.Context, raw json.RawMessage) (string, error) {
-		in, err := unmarshal(raw)
-		if err != nil {
-			return "", err
-		}
-		if err := m.Put(ctx, in.Key, in.Value); err != nil {
-			return "", err
-		}
-		return "saved: " + in.Key, nil
-	}); err != nil {
-		return err
-	}
-	if err := a.local.Register(tools.ToolDef{
-		Name: "memory_search", Description: "按子串检索长期记忆键,空查询列出全部键",
-		InputSchema: searchSchema,
-	}, func(ctx context.Context, raw json.RawMessage) (string, error) {
-		in, err := unmarshal(raw)
-		if err != nil {
-			return "", err
-		}
-		keys, err := m.Search(ctx, in.Query)
-		if err != nil {
-			return "", err
-		}
-		if len(keys) == 0 {
-			return "no matches", nil
-		}
-		return strings.Join(keys, "\n"), nil
-	}); err != nil {
-		return err
-	}
-	return a.local.Register(tools.ToolDef{
-		Name: "memory_forget", Description: "删除一条长期记忆",
-		InputSchema: forgetSchema,
-	}, func(ctx context.Context, raw json.RawMessage) (string, error) {
-		in, err := unmarshal(raw)
-		if err != nil {
-			return "", err
-		}
-		if err := m.Delete(ctx, in.Key); err != nil {
-			return "", err
-		}
-		return "deleted: " + in.Key, nil
-	})
+	return memory.RegisterTools(a.local, m)
 }
 
 // Tool 注册一个进程内函数工具(暴露名不加前缀);重名立即报错。
