@@ -56,10 +56,11 @@ import (
 	_ "embed"
 
 	"github.com/holihur/agent/internal/agent"
+	"github.com/holihur/agent/internal/apisrv"
+	"github.com/holihur/agent/internal/daemon"
 	"github.com/holihur/agent/internal/hook"
 	"github.com/holihur/agent/internal/hook/slashcmd"
 	"github.com/holihur/agent/internal/llm"
-	"github.com/holihur/agent/internal/daemon"
 	"github.com/holihur/agent/internal/mcp"
 	"github.com/holihur/agent/internal/mcpserver"
 	"github.com/holihur/agent/internal/mdns"
@@ -340,6 +341,7 @@ func run() error {
 		showVersion   = flag.Bool("version", false, "print version and exit (main)")
 		doUpdate      = flag.Bool("update", false, "self-update: download latest release and replace this binary (main)")
 		addr          = flag.String("addr", "", "serve MCP Streamable HTTP on this address (e.g. 0.0.0.0:8788) instead of REPL; tools: agent_run(text, session?), agent_sessions()")
+		apiAddr       = flag.String("api-addr", "", "serve the chat HTTP API + web UI on this address (e.g. 127.0.0.1:8790) instead of the REPL; enables shell/fs tools")
 		mdnsOn        = flag.Bool("mdns", false, "announce this agent via mDNS (_agent-mcp._tcp) for discovery (requires -addr or -daemon)")
 		mdnsName      = flag.String("name", "agent-mcp", "mDNS instance name (requires -mdns)")
 		callTimeout   = flag.Duration("timeout", 10*time.Minute, "per-call timeout for -addr/-daemon server mode")
@@ -485,6 +487,27 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+
+	// 聊天 API/UI 模式：常驻 HTTP 服务（开启 shell/fs，面向编码 copilot）。
+	// 凭据已在上方解析/校验，故置于此处。
+	if *apiAddr != "" {
+		var tempPtr *float64
+		if *temp >= 0 {
+			tempPtr = temp
+		}
+		return apisrv.Run(apisrv.Options{
+			Addr:            *apiAddr,
+			System:          *system,
+			APIKey:          apiKey,
+			BaseURL:         baseURL,
+			Model:           llmModel,
+			AuthStyle:       authStyle,
+			MaxTokens:       *maxToks,
+			MaxTurns:        *maxTurns,
+			Temperature:     tempPtr,
+			ReasoningEffort: *effort,
+		})
+	}
 
 	cwd, err := os.Getwd()
 	if err != nil {
