@@ -516,6 +516,7 @@ func run() error {
 			APIKey:          apiKey,
 			BaseURL:         baseURL,
 			Model:           llmModel,
+			API:             apiStyle,
 			AuthStyle:       authStyle,
 			MaxTokens:       *maxToks,
 			MaxTurns:        *maxTurns,

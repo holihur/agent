@@ -6,10 +6,12 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/holihur/agent/internal/agent"
+	"github.com/holihur/agent/internal/llm"
 )
 
 // fakeLLM 是固定回答的 LLM 桩（非流式）。
@@ -124,6 +126,39 @@ func TestChatSSEAndSessionList(t *testing.T) {
 	}
 	if !roles["user"] || !roles["assistant"] {
 		t.Fatalf("history missing roles: %+v", hist.Messages)
+	}
+}
+
+// TestBuildAgentProtocolSelection 验证 apisrv 按 Options.API 选择协议适配器，
+// 与 CLI/嵌入式的 anthropic|openai|responses 语义一致。
+func TestBuildAgentProtocolSelection(t *testing.T) {
+	mk := func(api string) *Server {
+		s, err := newServer(Options{
+			Addr: "127.0.0.1:0", APIKey: "k", BaseURL: "http://example.invalid", Model: "m",
+			API: api, SessionDir: t.TempDir(),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	check := func(api string, want reflect.Type) {
+		t.Helper()
+		ag, err := mk(api).buildAgent(&sessionAgent{name: "t"})
+		if err != nil {
+			t.Fatalf("api=%q: %v", api, err)
+		}
+		if got := reflect.TypeOf(ag.LLM); got != want {
+			t.Errorf("api=%q: LLM type = %v, want %v", api, got, want)
+		}
+	}
+	check("", reflect.TypeOf((*llm.Client)(nil)))
+	check("anthropic", reflect.TypeOf((*llm.Client)(nil)))
+	check("openai", reflect.TypeOf((*llm.ChatClient)(nil)))
+	check("responses", reflect.TypeOf((*llm.ResponsesClient)(nil)))
+
+	if _, err := mk("bogus").buildAgent(&sessionAgent{name: "t"}); err == nil || !strings.Contains(err.Error(), "unknown api") {
+		t.Fatalf("bogus api err = %v, want unknown api", err)
 	}
 }
 

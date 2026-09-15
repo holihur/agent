@@ -37,9 +37,10 @@ type Options struct {
 	Addr            string // 监听地址，如 127.0.0.1:8790
 	System          string // system prompt
 	APIKey          string // LLM 密钥（必填）
-	BaseURL         string // Anthropic 兼容端点（必填）
+	BaseURL         string // 端点（必填；协议见 API）
 	Model           string // 模型名（必填）
-	AuthStyle       string // bearer | x-api-key | both
+	API             string // anthropic(默认)|openai|responses；空 = anthropic
+	AuthStyle       string // bearer | x-api-key | both（仅 anthropic）
 	MaxTokens       int
 	MaxTurns        int
 	Temperature     *float64
@@ -84,7 +85,7 @@ type Server struct {
 	mu    sync.Mutex
 	sess  map[string]*sessionAgent
 
-	// llmFactory 仅用于测试注入假 LLM；nil 时用真实 Anthropic 兼容客户端。
+	// llmFactory 仅用于测试注入假 LLM；nil 时按 opts.API 构造真实协议客户端。
 	llmFactory func() agent.LLM
 }
 
@@ -220,10 +221,19 @@ func (s *Server) buildAgent(sa *sessionAgent) (*agent.Agent, error) {
 	if s.llmFactory != nil {
 		client = s.llmFactory()
 	} else {
-		c := llm.New(s.opts.APIKey, s.opts.BaseURL, s.opts.Model, s.opts.MaxTokens)
-		c.AuthStyle = s.opts.AuthStyle
-		c.Temperature = s.opts.Temperature
-		c.ReasoningEffort = s.opts.ReasoningEffort
+		// 与 CLI/嵌入式一致：按 API 选择协议适配器(anthropic|openai|responses)。
+		c, err := llm.NewAdapter(s.opts.API, llm.Config{
+			APIKey:          s.opts.APIKey,
+			BaseURL:         s.opts.BaseURL,
+			Model:           s.opts.Model,
+			MaxTokens:       s.opts.MaxTokens,
+			AuthStyle:       s.opts.AuthStyle,
+			Temperature:     s.opts.Temperature,
+			ReasoningEffort: s.opts.ReasoningEffort,
+		})
+		if err != nil {
+			return nil, err
+		}
 		client = c
 	}
 

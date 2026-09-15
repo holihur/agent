@@ -18,6 +18,20 @@ LLM_API_KEY=... LLM_BASE_URL=https://api.anthropic.com LLM_MODEL=claude-sonnet-4
 凭据也可经同名环境变量 `LLM_APIKEY`。该模式默认开启内置 `shell` 与
 `read`/`write`/`edit` 文件工具（与本仓库其它模式不同）。
 
+后端协议经 `LLM_API`（或 `-api` / `agent.json` 的 `api`）选择，与 CLI 其它模式一致：
+
+| 取值 | 端点 |
+| --- | --- |
+| `anthropic`（默认） | `{base}/v1/messages` |
+| `openai` | `{base}/v1/chat/completions`（OpenAI 兼容，如 Copilot 网关） |
+| `responses` | `{base}/v1/responses` |
+
+```bash
+# 例：OpenAI 兼容后端（含 reasoning_content 回传）
+LLM_API=openai LLM_API_KEY=... LLM_BASE_URL=https://api.example.com LLM_MODEL=gpt-4o \
+  agent -C /path/to/workspace -api-addr 127.0.0.1:8790
+```
+
 ## 端点
 
 ### `GET /healthz`
