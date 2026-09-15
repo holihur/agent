@@ -25,10 +25,24 @@ type TurnRequest struct {
 	Messages []Message
 }
 
+// TokenUsage 是一轮 LLM 调用的 token 用量;cache 分 input/output 记账。
+type TokenUsage struct {
+	Input       int // 未命中缓存的输入 token
+	Output      int
+	CacheRead   int // 命中缓存读取的输入 token
+	CacheCreate int // 写入缓存的输入 token
+}
+
+// Total 输入侧(含缓存读/写)加输出。
+func (u TokenUsage) Total() int {
+	return u.Input + u.Output + u.CacheRead + u.CacheCreate
+}
+
 // TurnResult 返回 assistant 消息与停止原因("tool_use" / "end_turn" / ...)。
 type TurnResult struct {
 	Assistant  Message
 	StopReason string
+	Usage      TokenUsage // 适配层能取到时填充,否则零值
 }
 
 // LLM 是编排层唯一能看到的基础设施抽象(port)。

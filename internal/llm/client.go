@@ -85,6 +85,7 @@ func (c *Client) Turn(ctx context.Context, r agent.TurnRequest) (agent.TurnResul
 		Role       string        `json:"role"`
 		Content    []wireBlock   `json:"content"`
 		StopReason string        `json:"stop_reason"`
+		Usage      wireUsage     `json:"usage"`
 	}
 	if err := json.Unmarshal(raw, &probe); err != nil {
 		return agent.TurnResult{}, fmt.Errorf("llm: decode response: %w", err)
@@ -101,6 +102,7 @@ func (c *Client) Turn(ctx context.Context, r agent.TurnRequest) (agent.TurnResul
 	return agent.TurnResult{
 		Assistant:  agent.Message{Role: agent.RoleAssistant, Blocks: blocks},
 		StopReason: probe.StopReason,
+		Usage:      probe.Usage.domain(),
 	}, nil
 }
 

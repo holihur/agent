@@ -84,6 +84,34 @@ func TestNewConfigOverridesEnv(t *testing.T) {
 	}
 }
 
+func TestNewAPIStyle(t *testing.T) {
+	envCreds(t)
+	t.Setenv("LLM_API", "openai")
+	a, err := New()
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer a.Close()
+	if _, ok := a.inner.LLM.(*llm.ChatClient); !ok {
+		t.Fatalf("inner LLM is %T, want *llm.ChatClient", a.inner.LLM)
+	}
+
+	// Config.API 覆盖 env
+	a2, err := New(Config{API: "responses"})
+	if err != nil {
+		t.Fatalf("New(responses): %v", err)
+	}
+	defer a2.Close()
+	if _, ok := a2.inner.LLM.(*llm.ResponsesClient); !ok {
+		t.Fatalf("inner LLM is %T, want *llm.ResponsesClient", a2.inner.LLM)
+	}
+
+	// 非法 API 报错
+	if _, err := New(Config{API: "bogus"}); err == nil || !strings.Contains(err.Error(), "unknown api") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestToolRegisterAndDuplicate(t *testing.T) {
 	envCreds(t)
 	a, err := New()

@@ -162,6 +162,23 @@ func TestInstallVerbose_DisplayOff(t *testing.T) {
 	}
 }
 
+func TestHumanDuration(t *testing.T) {
+	cases := []struct {
+		d    time.Duration
+		want string
+	}{
+		{500 * time.Microsecond, "1ms"},
+		{123 * time.Millisecond, "123ms"},
+		{2123 * time.Millisecond, "2.1s"},
+		{64 * time.Second, "1m4s"},
+	}
+	for _, c := range cases {
+		if got := humanDuration(c.d); got != c.want {
+			t.Fatalf("humanDuration(%v) = %q, want %q", c.d, got, c.want)
+		}
+	}
+}
+
 func TestPreviewTruncationLogic(t *testing.T) {
 	long := strings.Repeat("a", 400)
 	preview := strings.TrimSpace(long)

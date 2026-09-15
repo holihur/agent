@@ -62,13 +62,15 @@ type UserInput struct {
 	Text string
 }
 
-// TurnStat 是一轮 LLM 调用的统计;before 时 StopReason/Blocks 为零值。
+// TurnStat 是一轮 LLM 调用的统计;before 时 StopReason/Blocks/Duration/Usage 为零值。
 type TurnStat struct {
 	Turn       int // 0 起
 	Messages   int
 	Tools      int
-	StopReason string // 仅 after_llm
-	Blocks     int    // 仅 after_llm
+	StopReason string        // 仅 after_llm
+	Blocks     int           // 仅 after_llm
+	Duration   time.Duration // 仅 after_llm;本次 LLM 调用耗时
+	Usage      TokenUsage    // 仅 after_llm;token 用量
 }
 
 // ToolOutcome 是一次工具调用的结局(执行或被拒),只读观测。

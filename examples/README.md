@@ -70,6 +70,18 @@ LLM_API_KEY=... LLM_BASE_URL=... LLM_MODEL=... go run ./examples/embedded
 
 公开 API 见模块根的 `agent` 包文档(`New` / `Tool` / `MCP` / `Shell` / `FS` / `OnTextDelta` / `Run` / `Close`)。
 
+## 黑盒测试
+
+把编译产物当纯黑盒驱动,Python 标准库实现(自行 `go build`,自带假 LLM HTTP 服务器):
+
+```bash
+# CLI REPL:pty.openpty() 驱动交互式 REPL,分别验证 openai / anthropic 协议与多轮
+python3 examples/repl-blackbox/blackbox_test.py
+
+# agent-mcp:MCP Streamable HTTP 服务器(传输 / 协议 / 错误 / 会话 / mDNS)
+python3 examples/agent-mcp/blackbox_test.py
+```
+
 ## 说明
 
 - 两个示例都只实现 agent 客户端走过的现代路径(`server/discover` → `tools/list` → `tools/call`),不是通用 MCP 服务器,legacy(2025-06-18)握手未实现。

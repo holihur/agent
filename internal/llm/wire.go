@@ -34,6 +34,24 @@ type wireMessage struct {
 	Content []wireBlock `json:"content"`
 }
 
+// wireUsage 是 usage 字段的共享形状(非流式响应体与 message_start 顶层一致;
+// message_delta 里只有 output_tokens,其余为零值)。
+type wireUsage struct {
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+}
+
+func (u wireUsage) domain() agent.TokenUsage {
+	return agent.TokenUsage{
+		Input:       u.InputTokens,
+		Output:      u.OutputTokens,
+		CacheRead:   u.CacheReadInputTokens,
+		CacheCreate: u.CacheCreationInputTokens,
+	}
+}
+
 type wireBlock struct {
 	Type      string          `json:"type"`
 	Text      string          `json:"text,omitempty"`
@@ -59,7 +77,8 @@ type wireAPIError struct {
 	Message string `json:"message"`
 }
 
-// APIError 是解析后的 Anthropic API 错误(致命,冒泡终止)。
+// APIError 是解析后的 LLM API 错误(致命,冒泡终止)。
+// Anthropic / OpenAI 各协议适配器共用此类型;Type 取自各自错误体的类型字段。
 type APIError struct {
 	Type    string
 	Message string
@@ -67,7 +86,7 @@ type APIError struct {
 }
 
 func (e *APIError) Error() string {
-	return fmt.Sprintf("anthropic api error (%s, http %d): %s", e.Type, e.Status, e.Message)
+	return fmt.Sprintf("llm api error (%s, http %d): %s", e.Type, e.Status, e.Message)
 }
 
 // ---- 领域 → wire ----

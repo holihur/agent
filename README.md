@@ -35,6 +35,7 @@ cwd 下可选 `agent.json` 作为 flag 默认值(命令行 flag 始终可覆盖)
 ```json
 {
   "provider": "",
+  "api": "anthropic",
   "model": "claude-sonnet-4-5",
   "max_tokens": 4096,
   "max_turns": 60,
@@ -44,7 +45,22 @@ cwd 下可选 `agent.json` 作为 flag 默认值(命令行 flag 始终可覆盖)
 }
 ```
 
-支持字段:`provider`、`model`、`max_tokens`、`max_turns`、`temperature`、`reasoning_effort`、`session`、`session_compress`、`compress_max_tokens`、`compress_ratio`、`compress_keep`。
+支持字段:`provider`、`api`、`model`、`max_tokens`、`max_turns`、`temperature`、`reasoning_effort`、`session`、`session_compress`、`compress_max_tokens`、`compress_ratio`、`compress_keep`。
+
+### 协议适配(api)
+
+`LLM_API`(或 `-api` flag、`agent.json` 的 `api` 字段)选择端点协议,默认 `anthropic`:
+
+| 取值 | 端点 | 说明 |
+| --- | --- | --- |
+| `anthropic` | `{base}/v1/messages` | Anthropic Messages API(默认) |
+| `openai` | `{base}/v1/chat/completions` | OpenAI Chat Completions(老接口) |
+| `responses` | `{base}/v1/responses` | OpenAI Responses API(新接口) |
+
+```bash
+export LLM_API=openai      # 或 responses;openai/responses 恒用 Bearer 认证
+agent -api responses       # flag 优先于 env
+```
 
 ## MCP 接入
 

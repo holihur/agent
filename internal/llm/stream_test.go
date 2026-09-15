@@ -217,3 +217,29 @@ func TestTurnStreamEmptyToolInputDefaultsToObject(t *testing.T) {
 		t.Fatalf("empty input = %s, want {}", tb.Input)
 	}
 }
+
+func TestTurnStreamParsesUsage(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"type":"message_start","message":{"usage":{"input_tokens":10,"cache_read_input_tokens":200,"cache_creation_input_tokens":30}}}`,
+		``,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		``,
+		`data: {"type":"content_block_stop","index":0}`,
+		``,
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":42}}`,
+		``,
+	}, "\n")
+	c := sseServer(t, body)
+
+	res, err := c.TurnStream(context.Background(), agent.TurnRequest{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := res.Usage
+	if u.Input != 10 || u.Output != 42 || u.CacheRead != 200 || u.CacheCreate != 30 {
+		t.Fatalf("usage = %+v", u)
+	}
+	if u.Total() != 282 {
+		t.Fatalf("total = %d", u.Total())
+	}
+}

@@ -10,6 +10,7 @@ import (
 
 type appConfig struct {
 	Provider        *string  `json:"provider"`
+	API             *string  `json:"api"`
 	Model           *string  `json:"model"`
 	MaxTokens       *int     `json:"max_tokens"`
 	MaxTurns        *int     `json:"max_turns"`

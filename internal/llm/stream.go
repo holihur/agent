@@ -27,6 +27,10 @@ type wireStreamEvent struct {
 	Error        *wireAPIError `json:"error,omitempty"`         // error 事件
 	ContentBlock *wireBlock    `json:"content_block,omitempty"` // content_block_start
 	Delta        *wireDelta    `json:"delta,omitempty"`         // content_block_delta / message_delta
+	Message      *struct {     // message_start
+		Usage wireUsage `json:"usage"`
+	} `json:"message,omitempty"`
+	Usage *wireUsage `json:"usage,omitempty"` // message_delta 顶层
 }
 
 // TurnStream 以 SSE 流式调用 /v1/messages(stream:true),边接收边把 text 增量
@@ -72,6 +76,7 @@ func (c *Client) TurnStream(ctx context.Context, r agent.TurnRequest, emit func(
 	return agent.TurnResult{
 		Assistant:  agent.Message{Role: agent.RoleAssistant, Blocks: s.blocks},
 		StopReason: s.stopReason,
+		Usage:      s.usage,
 	}, nil
 }
 
@@ -81,6 +86,7 @@ type streamAssembler struct {
 
 	blocks     []agent.Block
 	stopReason string
+	usage      agent.TokenUsage
 
 	curType        string
 	curText        strings.Builder
@@ -91,6 +97,12 @@ type streamAssembler struct {
 
 // consume 逐行解析 SSE:data 行累积,空行分发给事件处理;event:/注释行忽略。
 func (s *streamAssembler) consume(r io.Reader) error {
+	return scanSSE(r, s.handle)
+}
+
+// scanSSE 是各协议流式适配器共享的 SSE 帧扫描器:data 行累积,空行触发 handle;
+// event:/注释行忽略,流末尾未跟空行时补一次分发。[DONE] 等哨兵由 handle 自行忽略。
+func scanSSE(r io.Reader, handle func(payload string) error) error {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), maxSSELine)
 	var dataLines []string
@@ -100,7 +112,7 @@ func (s *streamAssembler) consume(r io.Reader) error {
 		}
 		payload := strings.Join(dataLines, "\n")
 		dataLines = nil
-		return s.handle(payload)
+		return handle(payload)
 	}
 	for sc.Scan() {
 		line := sc.Text()
@@ -130,7 +142,11 @@ func (s *streamAssembler) handle(payload string) error {
 		return fmt.Errorf("llm: decode stream event: %w", err)
 	}
 	switch ev.Type {
-	case "message_start", "ping", "message_stop":
+	case "message_start":
+		if ev.Message != nil {
+			s.usage = ev.Message.Usage.domain()
+		}
+	case "ping", "message_stop":
 	case "content_block_start":
 		s.startBlock(ev.ContentBlock)
 	case "content_block_delta":
@@ -142,6 +158,9 @@ func (s *streamAssembler) handle(payload string) error {
 	case "message_delta":
 		if ev.Delta != nil {
 			s.stopReason = ev.Delta.StopReason
+		}
+		if ev.Usage != nil {
+			s.usage.Output = ev.Usage.OutputTokens
 		}
 	case "error":
 		if ev.Error != nil {

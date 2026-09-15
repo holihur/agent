@@ -26,9 +26,9 @@ type Rule struct {
 
 // Permissions 是文件落盘结构。
 type Permissions struct {
-	Version int    `json:"version"`
-	Allow   []Rule `json:"allow"`
-	Deny    []Rule `json:"deny"`
+	Version int          `json:"version"`
+	Allow   []Rule       `json:"allow"`
+	Deny    []Rule       `json:"deny"`
 	mu      sync.RWMutex `json:"-"`
 	path    string       `json:"-"`
 }

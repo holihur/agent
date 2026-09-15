@@ -2,8 +2,12 @@
 //
 // LLM 配置(env 或 .env,已有环境变量优先):
 //
-//	LLM_API_KEY(或 LLM_APIKEY)、LLM_BASE_URL(Anthropic 兼容端点)、LLM_MODEL
-//	LLM_AUTH_STYLE: bearer(默认) | x-api-key | both
+//	LLM_API_KEY(或 LLM_APIKEY)、LLM_BASE_URL、LLM_MODEL
+//	LLM_API: anthropic(默认) | openai | responses
+//	  anthropic → POST {base}/v1/messages
+//	  openai    → POST {base}/v1/chat/completions(Chat Completions 老接口)
+//	  responses → POST {base}/v1/responses(Responses API 新接口)
+//	LLM_AUTH_STYLE: bearer(默认) | x-api-key | both(仅 anthropic)
 //	-provider NAME(或 LLM_PROVIDER=NAME)时优读 NAME_API_KEY/NAME_APIKEY、NAME_BASE_URL、NAME_MODEL
 //
 // 用法:
@@ -26,10 +30,11 @@
 //	agent -session work                          # 续接会话 work(不存在则新建),每轮自动保存
 //	agent -temperature 0.2                       # 采样温度(<0 = 端点默认)
 //	agent -reasoning-effort high                 # 推理力度透传(空 = 端点默认)
+//	agent -api responses                         # 协议风格:anthropic|openai|responses(空 = LLM_API 或 anthropic)
 //	agent init                                   # 交互式生成 cwd 下 .env(已存在则拒绝)
 //	agent -q                                     # 无参数 + 管道 stdin 时读入整段输入当一次提问(echo hi | agent)
 //
-// agent.json(cwd 下,可选):provider/model/max_tokens/max_turns/temperature/
+// agent.json(cwd 下,可选):provider/api/model/max_tokens/max_turns/temperature/
 // reasoning_effort/session/session_compress/compress_* 等字段作为 flag 默认值,flag 始终可覆盖。
 //
 // MCP 服务器来源(可叠加,规范 docs/mcp.json.spec.md):
@@ -330,6 +335,7 @@ func run() error {
 		maxTurns      = flag.Int("max-turns", intOr(cfg.MaxTurns, 60), "max think-act-observe turns per question (<=0 = default 60)")
 		temp          = flag.Float64("temperature", floatOr(cfg.Temperature, -1), "sampling temperature; <0 = endpoint default (main)")
 		effort        = flag.String("reasoning-effort", stringOr(cfg.ReasoningEffort, ""), "reasoning effort passed through, e.g. low/medium/high; empty = endpoint default (main)")
+		api           = flag.String("api", stringOr(cfg.API, ""), "LLM API style: anthropic|openai|responses; empty = LLM_API env or anthropic (main)")
 		shell         = flag.String("shell", "on", "builtin shell tool; off/none disables (main)")
 		fs            = flag.String("fs", "on", "builtin file tools read/write/edit; off/none disables (main)")
 		sessName      = flag.String("session", stringOr(cfg.Session, ""), "persistent session name: resume if exists, autosave each turn (main)")
@@ -470,6 +476,15 @@ func run() error {
 	baseURL := envFirst(baseNames...)
 	llmModel := envFirst(modelNames...)
 	authStyle := envFirst(prefix+"AUTH_STYLE", "LLM_AUTH_STYLE")
+	// API 风格:flag(-api)> env(LLM_API)> 默认 anthropic。openai=Chat Completions 老接口,
+	// responses=Responses API 新接口;具体适配器由 llm.NewAdapter 构建并校验取值。
+	apiStyle := *api
+	if apiStyle == "" {
+		apiStyle = os.Getenv("LLM_API")
+	}
+	if apiStyle == "" {
+		apiStyle = "anthropic"
+	}
 	if *model != "" {
 		llmModel = *model
 	}
@@ -586,19 +601,29 @@ func run() error {
 	}
 	fmt.Fprintf(os.Stderr, "tools: %s\n", strings.Join(names, ", "))
 
-	llmClient := llm.New(apiKey, baseURL, llmModel, *maxToks)
-	llmClient.AuthStyle = authStyle
+	var tempPtr *float64
 	if *temp >= 0 {
 		if *temp > 1 {
 			return fmt.Errorf("-temperature must be in [0,1], got %v", *temp)
 		}
-		llmClient.Temperature = temp
+		tempPtr = temp
 	}
-	llmClient.ReasoningEffort = *effort
+	llmClient, err := llm.NewAdapter(apiStyle, llm.Config{
+		APIKey:          apiKey,
+		BaseURL:         baseURL,
+		Model:           llmModel,
+		MaxTokens:       *maxToks,
+		AuthStyle:       authStyle,
+		Temperature:     tempPtr,
+		ReasoningEffort: *effort,
+	})
+	if err != nil {
+		return fail(exitUsage, err)
+	}
 	ag := &agent.Agent{LLM: llmClient, Registry: registry, System: *system, Hooks: hooks, MaxTurns: *maxTurns}
 
 	ui.Agent = ag                       // 两阶段装配:Responder(即 UI)先于 Agent 可用
-	ui.Model = llmClient.Model          // banner 显示最终解析的模型(env/flag/provider 归一后)
+	ui.Model = llmModel                 // banner 显示最终解析的模型(env/flag/provider 归一后)
 	ag.OnTextDelta = ui.TextDeltaSink() // 流式增量 → 终端
 
 	// 会话压缩配置：接口化，LLM 压缩为唯一实现

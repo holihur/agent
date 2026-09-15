@@ -20,9 +20,9 @@ import (
 
 	core "github.com/holihur/agent/internal/agent"
 	"github.com/holihur/agent/internal/llm"
-	"github.com/holihur/agent/internal/memory"
 	"github.com/holihur/agent/internal/mcp"
 	"github.com/holihur/agent/internal/mdns"
+	"github.com/holihur/agent/internal/memory"
 	"github.com/holihur/agent/internal/session"
 	"github.com/holihur/agent/internal/tools"
 )
@@ -61,9 +61,10 @@ type MCPSpec struct {
 // Config 是可选装配配置:全部字段零值安全(空值回落 env 或内置默认)。
 type Config struct {
 	APIKey          string       // 空 → env LLM_API_KEY / LLM_APIKEY
-	BaseURL         string       // 空 → env LLM_BASE_URL(Anthropic 兼容端点)
+	BaseURL         string       // 空 → env LLM_BASE_URL(端点,协议见 API)
 	Model           string       // 空 → env LLM_MODEL
-	AuthStyle       string       // 空 → env LLM_AUTH_STYLE;bearer(默认) | x-api-key | both
+	API             string       // 空 → env LLM_API → anthropic;anthropic|openai|responses
+	AuthStyle       string       // 空 → env LLM_AUTH_STYLE;bearer(默认) | x-api-key | both(仅 anthropic)
 	System          string       // 空 → 不注入 system prompt
 	MaxTokens       int          // 0 → 1024
 	MaxTurns        int          // 0 → 默认 60
@@ -115,10 +116,19 @@ func New(cfg ...Config) (*Agent, error) {
 	if c.Temperature != nil && *c.Temperature > 1 {
 		return nil, fmt.Errorf("agent: temperature must be in [0,1], got %v", *c.Temperature)
 	}
-	client := llm.New(apiKey, baseURL, model, c.MaxTokens)
-	client.AuthStyle = authStyle
-	client.Temperature = c.Temperature
-	client.ReasoningEffort = c.ReasoningEffort
+	api := firstNonEmpty(c.API, os.Getenv("LLM_API"), "anthropic")
+	client, err := llm.NewAdapter(api, llm.Config{
+		APIKey:          apiKey,
+		BaseURL:         baseURL,
+		Model:           model,
+		MaxTokens:       c.MaxTokens,
+		AuthStyle:       authStyle,
+		Temperature:     c.Temperature,
+		ReasoningEffort: c.ReasoningEffort,
+	})
+	if err != nil {
+		return nil, err
+	}
 	sessions := c.Sessions
 	if sessions == nil {
 		sessions = session.NewFileStore(".agent/sessions")

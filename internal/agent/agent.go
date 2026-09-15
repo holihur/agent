@@ -61,6 +61,7 @@ func (a *Agent) Run(ctx context.Context, user string) (string, error) {
 		}
 		req = a.Hooks.chainTurnRequest(req)
 		a.Hooks.emitBeforeLLM(TurnStat{Turn: turn, Messages: len(req.Messages), Tools: len(req.Tools)})
+		start := time.Now()
 		res, err := a.turn(ctx, req)
 		if err != nil {
 			err = fmt.Errorf("agent: llm turn: %w", err)
@@ -70,6 +71,7 @@ func (a *Agent) Run(ctx context.Context, user string) (string, error) {
 		a.Hooks.emitAfterLLM(TurnStat{
 			Turn: turn, Messages: len(req.Messages), Tools: len(req.Tools),
 			StopReason: res.StopReason, Blocks: len(res.Assistant.Blocks),
+			Duration: time.Since(start), Usage: res.Usage,
 		})
 		res.Assistant = a.Hooks.chainAssistant(res.Assistant)
 		a.Messages = append(a.Messages, res.Assistant)

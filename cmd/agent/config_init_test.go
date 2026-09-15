@@ -20,7 +20,7 @@ func TestLoadAppConfig_MissingFile(t *testing.T) {
 func TestLoadAppConfig_ParsesFields(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "agent.json")
-	content := `{"model":"m1","max_tokens":4096,"temperature":0.3,"session":"work","compress_ratio":0.9}`
+	content := `{"model":"m1","max_tokens":4096,"temperature":0.3,"session":"work","compress_ratio":0.9,"api":"openai"}`
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -45,6 +45,9 @@ func TestLoadAppConfig_ParsesFields(t *testing.T) {
 	}
 	if cfg.Provider != nil {
 		t.Fatalf("unset provider should be nil, got %v", *cfg.Provider)
+	}
+	if cfg.API == nil || *cfg.API != "openai" {
+		t.Fatalf("api = %v", cfg.API)
 	}
 }
 
