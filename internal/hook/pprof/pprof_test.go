@@ -68,3 +68,17 @@ func TestInstallServesPprof(t *testing.T) {
 		t.Fatalf("pprof index body unexpected: %.200s", body)
 	}
 }
+
+// TestLoopbackAddr 覆盖安全评审 §L12：只有回环地址允许默认暴露 pprof。
+func TestLoopbackAddr(t *testing.T) {
+	for _, a := range []string{"127.0.0.1:6060", "localhost:6060", "[::1]:6060"} {
+		if !loopbackAddr(a) {
+			t.Fatalf("loopbackAddr(%q) = false", a)
+		}
+	}
+	for _, a := range []string{":6060", "0.0.0.0:6060", "10.0.0.1:6060"} {
+		if loopbackAddr(a) {
+			t.Fatalf("loopbackAddr(%q) = true", a)
+		}
+	}
+}

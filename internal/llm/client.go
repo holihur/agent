@@ -7,7 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
+	"strings"
 
 	"github.com/holihur/agent/internal/agent"
 )
@@ -107,6 +110,9 @@ func (c *Client) Turn(ctx context.Context, r agent.TurnRequest) (agent.TurnResul
 }
 
 func (c *Client) post(ctx context.Context, body []byte) (*http.Response, error) {
+	if err := validateBase(c.BaseURL); err != nil {
+		return nil, err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/v1/messages", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("llm: build request: %w", err)
@@ -135,6 +141,27 @@ func (c *Client) http() *http.Client {
 		return c.HTTP
 	}
 	return http.DefaultClient
+}
+
+// validateBase 拒绍非 https 的 LLM 端点（回环允许明文 http，便于本地 Ollama），
+// 避免密钥经明文链路发送（安全评审 §L13）。
+func validateBase(raw string) error {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Hostname() == "" {
+		return fmt.Errorf("llm: invalid base URL %q", raw)
+	}
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		if ip := net.ParseIP(u.Hostname()); ip != nil && ip.IsLoopback() {
+			return nil
+		}
+		if strings.EqualFold(u.Hostname(), "localhost") {
+			return nil
+		}
+	}
+	return fmt.Errorf("llm: refusing non-https base URL %q", raw)
 }
 
 // parseErrorBody 解析 {"type":"error","error":{"type","message"}};非该形状返回 nil。

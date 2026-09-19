@@ -232,3 +232,18 @@ func mustJSON(v any) []byte {
 	}
 	return b
 }
+
+// TestValidateBase 覆盖安全评审 §L13：非 https（非回环）LLM 端点被拒绝。
+func TestValidateBase(t *testing.T) {
+	ok := []string{"https://api.example.com", "http://127.0.0.1:11434", "http://localhost:8080"}
+	for _, u := range ok {
+		if err := validateBase(u); err != nil {
+			t.Fatalf("validateBase(%q) = %v", u, err)
+		}
+	}
+	for _, u := range []string{"http://api.example.com", "ftp://x", "", "not-a-url"} {
+		if err := validateBase(u); err == nil {
+			t.Fatalf("validateBase(%q) should fail", u)
+		}
+	}
+}

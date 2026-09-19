@@ -12,11 +12,14 @@ package mcpserver
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -106,15 +109,18 @@ func (p *pool) names() ([]string, error) {
 }
 
 // Run 启动 MCP Streamable HTTP 服务器并阻塞;mdnsName 非空时开启 mDNS 广播。
+// 访问控制：设 AGENT_MCP_TOKEN 后 /mcp 需 `Authorization: Bearer <token>`；
+// 绑定非回环地址时强制要求该 token（安全评审 §L10）。
 func Run(addr string, timeout time.Duration, mdnsName string) error {
+	if mdnsName != "" && loopbackAddr(addr) {
+		// 不静默改绑 0.0.0.0：广播回环地址对外不可达，直接拒绝并提示显式地址。
+		return fmt.Errorf("mcpserver: -mdns requires a non-loopback -addr (got %q)", addr)
+	}
+	token := strings.TrimSpace(os.Getenv("AGENT_MCP_TOKEN"))
+	if !loopbackAddr(addr) && token == "" {
+		return fmt.Errorf("mcpserver: refusing to expose %s without AGENT_MCP_TOKEN", addr)
+	}
 	if mdnsName != "" {
-		// 广播播报的是对外可达地址;loopback 监听对外不可达,
-		// 自动改绑全部接口(保留端口),否则远端 agent 发现后连不上。
-		if host, p, err := net.SplitHostPort(addr); err == nil &&
-			(host == "127.0.0.1" || host == "localhost" || host == "::1") {
-			addr = net.JoinHostPort("", p)
-			log.Printf("mcpserver: -mdns with loopback addr; rebinding to %s for reachability", addr)
-		}
 		stop, err := mdns.Announce(context.Background(), mdnsName, port(addr), map[string]string{
 			"path": "/mcp",
 		})
@@ -128,10 +134,42 @@ func Run(addr string, timeout time.Duration, mdnsName string) error {
 	p := newPool(timeout)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/mcp", func(w http.ResponseWriter, req *http.Request) {
+		if token != "" && subtle.ConstantTimeCompare([]byte(bearerToken(req)), []byte(token)) != 1 {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 		handle(p, w, req)
 	})
 	log.Printf("mcpserver: listening on http://%s/mcp", addr)
 	return http.ListenAndServe(addr, mux)
+}
+
+// loopbackAddr 判断监听地址是否仅绑定回环（空 host = 全部接口，非回环）。
+func loopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
+}
+
+// bearerToken 从 Authorization 头提取 Bearer token。
+func bearerToken(r *http.Request) string {
+	const prefix = "Bearer "
+	h := r.Header.Get("Authorization")
+	if len(h) <= len(prefix) || !strings.EqualFold(h[:len(prefix)], prefix) {
+		return ""
+	}
+	return strings.TrimSpace(h[len(prefix):])
 }
 
 func handle(p *pool, w http.ResponseWriter, req *http.Request) {
