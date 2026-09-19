@@ -16,7 +16,8 @@ LLM_API_KEY=... LLM_BASE_URL=https://api.anthropic.com LLM_MODEL=claude-sonnet-4
   agent -C /path/to/workspace -api-addr 127.0.0.1:8790
 ```
 
-凭据也可经同名环境变量 `LLM_APIKEY`。该模式默认开启内置 `shell` 与
+凭据也可经同名环境变量 `LLM_APIKEY`；或写入 0600 文件后用 `LLM_API_KEY_FILE`
+指向它（避免密钥出现在进程环境 / `/proc/<pid>/environ`，gitdash 即用此方式）。该模式默认开启内置 `shell` 与
 `read`/`write`/`edit` 文件工具（与本仓库其它模式不同）；可用 `-shell off` /
 `-fs off` 关闭。
 

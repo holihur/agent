@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"reflect"
 	"testing"
 
@@ -100,5 +101,27 @@ func TestEnvPairsSorted(t *testing.T) {
 	}
 	if got := envPairs(nil); got != nil {
 		t.Fatalf("nil should be nil, got %v", got)
+	}
+}
+
+// TestEnvOrFileFirst 覆盖安全评审 §3.4：密钥优先从环境读取，否则从 0600
+// 临时文件（NAME_FILE）读取，避免密钥出现在子进程环境。
+func TestEnvOrFileFirst(t *testing.T) {
+	dir := t.TempDir()
+	keyFile := dir + "/key"
+	if err := os.WriteFile(keyFile, []byte("  sk-from-file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TEST_KEY_FILE", keyFile)
+	t.Setenv("TEST_KEY", "")
+	if got := envOrFileFirst("TEST_KEY"); got != "sk-from-file" {
+		t.Fatalf("file key = %q", got)
+	}
+	t.Setenv("TEST_KEY", "sk-from-env")
+	if got := envOrFileFirst("TEST_KEY"); got != "sk-from-env" {
+		t.Fatalf("env key = %q", got)
+	}
+	if got := envOrFileFirst("MISSING_KEY"); got != "" {
+		t.Fatalf("missing key = %q", got)
 	}
 }

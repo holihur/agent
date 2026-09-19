@@ -11,7 +11,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -91,6 +93,9 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 		base = "https://github.com"
 	}
 	base = strings.TrimRight(base, "/")
+	if err := validateBaseURL(base); err != nil {
+		return res, err
+	}
 	client := opt.Client
 	if client == nil {
 		client = http.DefaultClient
@@ -334,6 +339,34 @@ func copyFile(src, dst string) error {
 }
 
 func defaultBase() string { return "https://github.com" }
+
+// validateBaseURL 拒绍非 https 更新源（回环地址允许明文 http，便于本地测试），
+// 防止被指向中间人或降级下载（安全评审 §3.6）。
+func validateBaseURL(base string) error {
+	u, err := url.Parse(base)
+	if err != nil || u.Hostname() == "" {
+		return fmt.Errorf("selfupdate: invalid base URL %q", base)
+	}
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		if isLoopbackHost(u.Hostname()) {
+			return nil
+		}
+	}
+	return fmt.Errorf("selfupdate: refusing non-https update base %q", base)
+}
+
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
+}
 
 // isNewer 比较 current 与 latest 两个版本号(latest 需形如 vX.Y.Z,可带前缀):
 // current 为空或 "dev"(本地构建)时总是返回 true;版本相等返回 false。

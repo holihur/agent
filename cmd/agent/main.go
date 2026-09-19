@@ -473,7 +473,7 @@ func run() error {
 		modelNames = append([]string{prefix + "MODEL"}, modelNames...)
 	}
 
-	apiKey := envFirst(keyNames...)
+	apiKey := envOrFileFirst(keyNames...)
 	baseURL := envFirst(baseNames...)
 	llmModel := envFirst(modelNames...)
 	authStyle := envFirst(prefix+"AUTH_STYLE", "LLM_AUTH_STYLE")
@@ -743,6 +743,30 @@ func run() error {
 func envFirst(names ...string) string {
 	for _, n := range names {
 		if v := os.Getenv(n); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// envOrFileFirst 返回首个非空环境变量；若都为空则尝试对应的 `NAME_FILE`
+// （0600 临时文件），避免密钥出现在子进程环境 / /proc/<pid>/environ 中。
+func envOrFileFirst(names ...string) string {
+	for _, n := range names {
+		if v := strings.TrimSpace(os.Getenv(n)); v != "" {
+			return v
+		}
+	}
+	for _, n := range names {
+		p := strings.TrimSpace(os.Getenv(n + "_FILE"))
+		if p == "" {
+			continue
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		if v := strings.TrimSpace(string(b)); v != "" {
 			return v
 		}
 	}

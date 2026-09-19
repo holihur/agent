@@ -234,3 +234,19 @@ func TestArchiveName(t *testing.T) {
 		t.Fatalf("archiveName = %q, want %q", n, want)
 	}
 }
+
+// TestValidateBaseURL 覆盖安全评审 §3.6：更新源必须为 https（回环允许 http）。
+func TestValidateBaseURL(t *testing.T) {
+	ok := []string{"https://github.com", "https://mirror.example.com/x", "http://127.0.0.1:8080", "http://localhost:9"}
+	for _, u := range ok {
+		if err := validateBaseURL(u); err != nil {
+			t.Fatalf("validateBaseURL(%q) = %v", u, err)
+		}
+	}
+	bad := []string{"http://evil.example.com", "ftp://github.com", "github.com", ""}
+	for _, u := range bad {
+		if err := validateBaseURL(u); err == nil {
+			t.Fatalf("validateBaseURL(%q) should fail", u)
+		}
+	}
+}
