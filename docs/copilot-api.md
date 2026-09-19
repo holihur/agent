@@ -12,11 +12,19 @@ gitdash 与 agent 运行时之间的**双向聊天协议**。双方只通过本�
 
 ```bash
 LLM_API_KEY=... LLM_BASE_URL=https://api.anthropic.com LLM_MODEL=claude-sonnet-4-5 \
+  AGENT_API_TOKEN=$(openssl rand -hex 32) \
   agent -C /path/to/workspace -api-addr 127.0.0.1:8790
 ```
 
 凭据也可经同名环境变量 `LLM_APIKEY`。该模式默认开启内置 `shell` 与
-`read`/`write`/`edit` 文件工具（与本仓库其它模式不同）。
+`read`/`write`/`edit` 文件工具（与本仓库其它模式不同）；可用 `-shell off` /
+`-fs off` 关闭。
+
+> **访问控制**：当设置 `AGENT_API_TOKEN`（或 `GITDASH_AGENT_TOKEN`）时，除
+> `/healthz` 外的所有请求都必须携带 `Authorization: Bearer <token>`，且浏览器
+> 跨站 Origin 会被拒绝（防 CSRF 驱动 shell/fs）。未设置令牌时启动会打印告警：
+> 任何能访问该端口的本机进程或网页都可驱动内置工具。gitdash 每会话生成随机
+> 令牌并经环境变量下发。
 
 后端协议经 `LLM_API`（或 `-api` / `agent.json` 的 `api`）选择，与 CLI 其它模式一致：
 

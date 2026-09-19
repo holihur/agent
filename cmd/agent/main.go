@@ -49,6 +49,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"maps"
 	"os"
 	"os/signal"
@@ -503,12 +504,16 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	// 聊天 API/UI 模式：常驻 HTTP 服务（开启 shell/fs，面向编码 copilot）。
+	// 聊天 API/UI 模式：常驻 HTTP 服务（默认开启 shell/fs，面向编码 copilot）。
 	// 凭据已在上方解析/校验，故置于此处。
 	if *apiAddr != "" {
 		var tempPtr *float64
 		if *temp >= 0 {
 			tempPtr = temp
+		}
+		accessToken := envFirst("AGENT_API_TOKEN", "GITDASH_AGENT_TOKEN")
+		if accessToken == "" {
+			log.Printf("apisrv: WARNING: -api-addr without AGENT_API_TOKEN; any local process (and any web page able to reach this port) can drive the shell/fs tools")
 		}
 		return apisrv.Run(apisrv.Options{
 			Addr:            *apiAddr,
@@ -522,6 +527,9 @@ func run() error {
 			MaxTurns:        *maxTurns,
 			Temperature:     tempPtr,
 			ReasoningEffort: *effort,
+			AccessToken:     accessToken,
+			DisableShell:    *shell == "off" || *shell == "none",
+			DisableFS:       *fs == "off" || *fs == "none",
 		})
 	}
 

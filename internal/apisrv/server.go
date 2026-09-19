@@ -17,11 +17,13 @@ package apisrv
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -46,6 +48,14 @@ type Options struct {
 	Temperature     *float64
 	ReasoningEffort string
 	SessionDir      string // 会话持久化目录；空 → .agent/sessions
+
+	// AccessToken 非空时，除 /healthz 外的所有请求都必须携带
+	// `Authorization: Bearer <token>`。用于把 gitdash 等宿主与浏览器 CSRF 隔开。
+	AccessToken string
+	// DisableShell / DisableFS 为 true 时不注册对应内置工具（对齐 REPL 的
+	// -shell off / -fs off；默认 false 保持开启）。
+	DisableShell bool
+	DisableFS    bool
 }
 
 // ProtocolVersion 标识 gitdash ↔ agent 的聊天协议版本（见 docs/copilot-api.md）。
@@ -160,7 +170,8 @@ func newServer(opts Options) (*Server, error) {
 	return &Server{opts: opts, store: session.NewFileStore(dir), sess: map[string]*sessionAgent{}}, nil
 }
 
-// Handler 返回路由（供宿主/测试复用）。
+// Handler 返回路由（供宿主/测试复用）。除 /healthz 外的请求经过访问令牌与
+// 同源（Origin）校验：无令牌的浏览器跨站请求无法驱动 shell/文件工具。
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealth)
@@ -169,7 +180,52 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/chat", s.handleChat)
 	mux.HandleFunc("/api/cancel", s.handleCancel)
 	mux.HandleFunc("/", s.handleIndex)
-	return mux
+	return s.withAccessControl(mux)
+}
+
+// withAccessControl 强制访问令牌并拒绝跨站浏览器请求。
+func (s *Server) withAccessControl(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// /healthz 供宿主做启动探活，不含敏感数据，放行。
+		if r.URL.Path == "/healthz" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if !s.originAllowed(r) {
+			http.Error(w, "forbidden origin", http.StatusForbidden)
+			return
+		}
+		if s.opts.AccessToken != "" {
+			tok := bearerToken(r.Header.Get("Authorization"))
+			if subtle.ConstantTimeCompare([]byte(tok), []byte(s.opts.AccessToken)) != 1 {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// originAllowed 拒绝与自身 Host 不一致的 Origin（含 "null"）。缺失 Origin 的
+// 非浏览器客户端（宿主/curl）放行，真正的访问控制由 AccessToken 承担。
+func (s *Server) originAllowed(r *http.Request) bool {
+	o := strings.TrimSpace(r.Header.Get("Origin"))
+	if o == "" {
+		return true
+	}
+	u, err := url.Parse(o)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	return strings.EqualFold(u.Host, r.Host)
+}
+
+func bearerToken(h string) string {
+	const prefix = "Bearer "
+	if len(h) <= len(prefix) || !strings.EqualFold(h[:len(prefix)], prefix) {
+		return ""
+	}
+	return strings.TrimSpace(h[len(prefix):])
 }
 
 // get 返回（或惰性构造）指定会话的 agent。
@@ -194,15 +250,20 @@ func (s *Server) get(name string) (*sessionAgent, error) {
 	return sa, nil
 }
 
-// buildAgent 构造一个开启 shell/fs 的 agent，并把流式与工具事件接到会话。
+// buildAgent 构造一个 agent，并把流式与工具事件接到会话；shell/fs 工具按
+// Options.DisableShell/DisableFS 注册（对齐 REPL 的 -shell off/-fs off）。
 func (s *Server) buildAgent(sa *sessionAgent) (*agent.Agent, error) {
 	registry := tools.New()
 	local := tools.NewLocal()
-	if err := tools.RegisterShell(local); err != nil {
-		return nil, err
+	if !s.opts.DisableShell {
+		if err := tools.RegisterShell(local); err != nil {
+			return nil, err
+		}
 	}
-	if err := tools.RegisterFS(local); err != nil {
-		return nil, err
+	if !s.opts.DisableFS {
+		if err := tools.RegisterFS(local); err != nil {
+			return nil, err
+		}
 	}
 	if err := registry.Register(local); err != nil {
 		return nil, err

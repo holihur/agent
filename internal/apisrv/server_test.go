@@ -174,3 +174,63 @@ func TestChatEmptyText(t *testing.T) {
 		t.Fatalf("status = %d, want 400", resp.StatusCode)
 	}
 }
+
+// TestAccessTokenAndOrigin 覆盖安全评审 §1.1：/api-* 必须携带进程级 bearer
+// token，且拒绝跨站 Origin；/healthz 保持开放供宿主探活。
+func TestAccessTokenAndOrigin(t *testing.T) {
+	s, err := newServer(Options{
+		Addr: "127.0.0.1:0", System: "test", APIKey: "k", BaseURL: "http://example.invalid", Model: "m",
+		SessionDir: t.TempDir(), AccessToken: "sekret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	// 无 token → 401
+	resp, err := http.Get(ts.URL + "/api/sessions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("no token status = %d, want 401", resp.StatusCode)
+	}
+
+	// /healthz 仍开放
+	resp, err = http.Get(ts.URL + "/healthz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("healthz status = %d, want 200", resp.StatusCode)
+	}
+
+	// 跨站 Origin → 403（即使 token 正确）
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/sessions", nil)
+	req.Header.Set("Authorization", "Bearer sekret")
+	req.Header.Set("Origin", "http://evil.example")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("evil origin status = %d, want 403", resp.StatusCode)
+	}
+
+	// 正确 token + 同源 → 200
+	req, _ = http.NewRequest(http.MethodGet, ts.URL+"/api/sessions", nil)
+	req.Header.Set("Authorization", "Bearer sekret")
+	req.Header.Set("Origin", ts.URL)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("authorized status = %d, want 200", resp.StatusCode)
+	}
+}
