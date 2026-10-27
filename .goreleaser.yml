@@ -18,10 +18,9 @@ builds:
     binary: agent
     env:
       - CGO_ENABLED=0
+    # mdns / CLI readline use Linux-only syscalls (IPMreqn, unix.Poll).
     goos:
       - linux
-      - windows
-      - darwin
     goarch:
       - amd64
       - arm64
