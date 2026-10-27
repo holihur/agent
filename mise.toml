@@ -1,0 +1,4 @@
+# Toolchain versions (latest stable) for reproducible local builds.
+# Install with `mise install`; refresh lockfile checksums with `mise lock`.
+[tools]
+go = "1.27.3"
